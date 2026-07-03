@@ -143,6 +143,9 @@ export default function Home() {
   // Integration verification loading states
   const [integrationChecking, setIntegrationChecking] = useState<Record<string, boolean>>({});
 
+  // Active project selector (for agent context — like the model selector)
+  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+
   // New Project Dialog State
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [newProjName, setNewProjName] = useState("");
@@ -181,10 +184,11 @@ export default function Home() {
     if (typeof window !== "undefined") {
       // Restore selected model
       const savedModel = localStorage.getItem("ael_selected_model");
-      if (savedModel && AVAILABLE_MODELS.includes(savedModel)) {
-        setSelectedModel(savedModel);
-      }
-
+      if (savedModel) setSelectedModel(savedModel);
+      // Restore selected project
+      const savedProject = localStorage.getItem("ael_selected_project");
+      if (savedProject) setSelectedProjectId(savedProject);
+      
       // Restore chat sessions
       const savedSessions = localStorage.getItem("ael_sessions");
       if (savedSessions) {
@@ -655,10 +659,6 @@ export default function Home() {
         <main className="flex-1 flex flex-col justify-center items-center px-6 md:px-12 py-16 text-center max-w-5xl mx-auto space-y-12">
           
           <div className="space-y-4">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-100 text-xs font-semibold text-emerald-800 animate-pulse">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#3ecf8e]" />
-              Production Ready v1.5
-            </div>
             <h1 className="text-4xl md:text-6xl font-extrabold text-slate-900 tracking-tight leading-tight">
               Say hello to the first <br/>
               <span className="bg-gradient-to-r from-emerald-600 to-[#3ecf8e] bg-clip-text text-transparent">
@@ -869,20 +869,7 @@ export default function Home() {
                 Usage
               </button>
 
-              {/* Billing Tab */}
-              <button
-                onClick={() => setActiveTab("billing")}
-                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium transition-all ${
-                  activeTab === "billing"
-                    ? "bg-[#f3f4f6] text-[#111827] font-bold"
-                    : "text-[#6b7280] hover:bg-[#f9fafb] hover:text-[#111827]"
-                }`}
-              >
-                <svg className="w-4 h-4 text-[#8c8c8c]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                </svg>
-                Billing
-              </button>
+
 
               {/* Settings Tab */}
               <button
@@ -1527,6 +1514,32 @@ export default function Home() {
                                 </div>
                               </div>
                             )}
+                            {/* Standup Remediation Approval Panel */}
+                            {interruptionReason === "standup_remediation_approval" && (
+                              <div className="space-y-2">
+                                <p className="text-[11px] text-[#374151] leading-relaxed">
+                                  AEL found Critical overdue tasks and recommends scheduling follow-up sync meetings for all affected developers. Approve to proceed?
+                                </p>
+                                <div className="flex gap-2">
+                                  <Button
+                                    onClick={() => triggerAgentMessage("yes")}
+                                    className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white text-xs h-8 flex-1 font-bold rounded shadow-sm"
+                                    disabled={sendingMessage}
+                                  >
+                                    ✓ Yes, Schedule All Syncs
+                                  </Button>
+                                  <Button
+                                    onClick={() => triggerAgentMessage("no")}
+                                    variant="outline"
+                                    className="border-[#e5e7eb] hover:bg-[#f9fafb] text-red-600 text-xs h-8 flex-1 rounded bg-white"
+                                    disabled={sendingMessage}
+                                  >
+                                    ✕ Skip / Dismiss
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
+
                           </div>
                         )}
 
@@ -1949,61 +1962,7 @@ export default function Home() {
               </div>
             )}
 
-            {/* BILLING TAB */}
-            {activeTab === "billing" && (
-              <div className="h-full overflow-y-auto space-y-6">
-                <div>
-                  <h2 className="text-sm font-bold text-slate-900">Billing and Subscription</h2>
-                  <p className="text-xs text-slate-500 mt-0.5">Manage your billing plans, subscription tier, and invoices.</p>
-                </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Current Plan Card */}
-                  <div className="bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm flex flex-col justify-between h-56">
-                    <div>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
-                        CURRENT TIER
-                      </span>
-                      <h3 className="text-lg font-bold text-slate-900 mt-2">Free Starter Plan</h3>
-                      <p className="text-xs text-slate-500 mt-1">
-                        Perfect for local staging testing, workspace evaluations, and simple SRE checkpointer graphs.
-                      </p>
-                    </div>
-
-                    <div className="flex items-center justify-between border-t border-slate-100 pt-3">
-                      <span className="text-sm font-extrabold text-slate-950">$0 <span className="text-xs text-slate-400 font-normal">/ month</span></span>
-                      <Button
-                        onClick={() => toast.info("Pro Plan upgrade is initiated.")}
-                        className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white text-xs h-8 font-bold"
-                      >
-                        Upgrade Workspace
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* Mock Invoices */}
-                  <div className="bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm space-y-3">
-                    <h3 className="text-xs font-bold text-slate-900">Recent Invoices</h3>
-                    <div className="space-y-2">
-                      <div className="flex justify-between items-center text-xs border border-slate-100 p-2.5 rounded bg-slate-50">
-                        <div className="font-semibold text-slate-800">
-                          <p>INV-2026-001</p>
-                          <p className="text-[10px] text-slate-400 font-normal">July 1, 2026</p>
-                        </div>
-                        <span className="text-slate-900 font-mono font-bold">$0.00</span>
-                      </div>
-                      <div className="flex justify-between items-center text-xs border border-slate-100 p-2.5 rounded bg-slate-50">
-                        <div className="font-semibold text-slate-800">
-                          <p>INV-2026-002</p>
-                          <p className="text-[10px] text-slate-400 font-normal">June 1, 2026</p>
-                        </div>
-                        <span className="text-slate-900 font-mono font-bold">$0.00</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
 
             {/* ORGANIZATION SETTINGS TAB */}
             {activeTab === "settings" && (
@@ -2079,12 +2038,69 @@ export default function Home() {
                 <div className="bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm space-y-4">
                   <div>
                     <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider text-slate-700">Active GitHub Repositories</h2>
-                    <p className="text-xs text-slate-500 mt-0.5">Repositories mapped to active database projects. Used by semantic commit triaging.</p>
+                    <p className="text-xs text-slate-500 mt-0.5">Repositories mapped to active database projects. Select the active project context for the agent.</p>
                   </div>
 
+                  {/* Project Selector — mirrors the model selector UX */}
+                  {projects.length > 0 && (
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase">Agent Active Project Context</label>
+                      <select
+                        value={selectedProjectId}
+                        onChange={(e) => {
+                          const pid = e.target.value;
+                          setSelectedProjectId(pid);
+                          localStorage.setItem("ael_selected_project", pid);
+                          const proj = projects.find(p => p.project_id === pid);
+                          toast.success(`Agent context set to: ${proj?.project_name ?? pid}`);
+                        }}
+                        className="w-full border border-[#e5e7eb] bg-white text-xs text-slate-800 rounded-md h-9 px-3 font-mono shadow-sm focus:outline-none focus:ring-2 focus:ring-[#3ecf8e]/40"
+                      >
+                        <option value="">— Select active project —</option>
+                        {projects.map((p) => (
+                          <option key={p.project_id} value={p.project_id}>
+                            {p.project_name} — {p.github_repo_url}
+                          </option>
+                        ))}
+                      </select>
+
+                      {/* Scrollable clickable project list — like the model list */}
+                      <div className="border border-slate-100 rounded-md overflow-hidden bg-slate-50">
+                        <ScrollArea className="h-36">
+                          <div className="p-2 space-y-1">
+                            {projects.map((p) => (
+                              <div
+                                key={p.project_id}
+                                onClick={() => {
+                                  setSelectedProjectId(p.project_id);
+                                  localStorage.setItem("ael_selected_project", p.project_id);
+                                  toast.success(`Agent context: ${p.project_name}`);
+                                }}
+                                className={`text-[11px] px-2.5 py-2 rounded cursor-pointer transition-colors flex items-center justify-between ${
+                                  selectedProjectId === p.project_id
+                                    ? "bg-emerald-50 text-emerald-800 font-bold border border-emerald-100"
+                                    : "text-slate-600 hover:bg-slate-100"
+                                }`}
+                              >
+                                <div>
+                                  <span className="font-semibold">{p.project_name}</span>
+                                  <span className="text-slate-400 font-mono text-[10px] ml-2">{p.github_repo_url}</span>
+                                </div>
+                                {selectedProjectId === p.project_id && (
+                                  <span className="text-[10px] text-emerald-600 font-bold shrink-0">✓ Active</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </ScrollArea>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Read-only repo table */}
                   <div className="space-y-2">
                     {projectsLoading ? (
-                      <p className="text-xs text-slate-400 py-4 text-center">Checking projects repositories...</p>
+                      <p className="text-xs text-slate-400 py-4 text-center">Checking project repositories...</p>
                     ) : projects.length === 0 ? (
                       <p className="text-xs text-slate-400 py-4 text-center">No repositories mapped. Register a project first.</p>
                     ) : (
@@ -2099,10 +2115,27 @@ export default function Home() {
                           </TableHeader>
                           <TableBody>
                             {projects.map((p) => (
-                              <TableRow key={p.project_id} className="border-[#e5e7eb] hover:bg-slate-50">
-                                <TableCell className="font-bold text-xs text-slate-900">{p.project_name}</TableCell>
+                              <TableRow
+                                key={p.project_id}
+                                className={`border-[#e5e7eb] cursor-pointer transition-colors ${
+                                  selectedProjectId === p.project_id ? "bg-emerald-50" : "hover:bg-slate-50"
+                                }`}
+                                onClick={() => {
+                                  setSelectedProjectId(p.project_id);
+                                  localStorage.setItem("ael_selected_project", p.project_id);
+                                  toast.success(`Agent context: ${p.project_name}`);
+                                }}
+                              >
+                                <TableCell className="font-bold text-xs text-slate-900">
+                                  <div className="flex items-center gap-1.5">
+                                    {selectedProjectId === p.project_id && (
+                                      <span className="w-1.5 h-1.5 rounded-full bg-[#3ecf8e]" />
+                                    )}
+                                    {p.project_name}
+                                  </div>
+                                </TableCell>
                                 <TableCell className="font-mono text-xs text-emerald-600">
-                                  <a href={p.github_repo_url} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-1.5">
+                                  <a href={p.github_repo_url} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
                                     {p.github_repo_url}
                                     <svg className="w-3 h-3 text-slate-400 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                       <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -2112,7 +2145,7 @@ export default function Home() {
                                 <TableCell>
                                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-100">
                                     <span className="w-1 h-1 bg-[#3ecf8e] rounded-full animate-ping" />
-                                    Synced
+                                    {selectedProjectId === p.project_id ? "Active Context" : "Synced"}
                                   </span>
                                 </TableCell>
                               </TableRow>
