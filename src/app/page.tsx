@@ -48,6 +48,19 @@ interface TeamMember {
   created_at: string;
 }
 
+interface UsageData {
+  totalEvents: number;
+  totalTasks: number;
+  totalMembers: number;
+  totalProjects: number;
+  overdueTasks: number;
+  thisWeekEvents: number;
+  lastWeekEvents: number;
+  weeklyChangePercent: number;
+  hourlyCounts: number[];   // array[24]
+  generatedAt: string;
+}
+
 const AVAILABLE_MODELS = [
   "models/antigravity-preview-05-2026",
   "models/aqa",
@@ -123,6 +136,10 @@ export default function Home() {
   const [team, setTeam] = useState<TeamMember[]>([]);
   const [teamLoading, setTeamLoading] = useState(false);
 
+  // Usage stats (from /api/usage — real Supabase data)
+  const [usageData, setUsageData] = useState<UsageData | null>(null);
+  const [usageLoading, setUsageLoading] = useState(false);
+
   // New Project Dialog State
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [newProjName, setNewProjName] = useState("");
@@ -156,6 +173,7 @@ export default function Home() {
     fetchLogs();
     fetchProjects();
     fetchTeam();
+    fetchUsage();
 
     if (typeof window !== "undefined") {
       // Restore selected model
@@ -231,6 +249,24 @@ export default function Home() {
       toast.error("Failed to retrieve active projects.");
     } finally {
       setProjectsLoading(false);
+    }
+  };
+
+  // Fetch real usage stats from Supabase
+  const fetchUsage = async () => {
+    try {
+      setUsageLoading(true);
+      const res = await fetch("/api/usage");
+      const data = await res.json();
+      if (res.ok) {
+        setUsageData(data);
+      } else {
+        toast.error(`Usage fetch error: ${data.error}`);
+      }
+    } catch (err) {
+      toast.error("Failed to load workspace usage stats.");
+    } finally {
+      setUsageLoading(false);
     }
   };
 
@@ -1686,44 +1722,183 @@ export default function Home() {
               </div>
             )}
 
-            {/* USAGE TAB */}
+            {/* USAGE TAB — REAL SUPABASE DATA */}
             {activeTab === "usage" && (
-              <div className="h-full overflow-y-auto space-y-5 bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm">
-                <div>
-                  <h2 className="text-sm font-bold text-slate-900">Workspace Compute Usage</h2>
-                  <p className="text-xs text-slate-500 mt-0.5">Overview of database storage, query traffic, egress limits, and API consumption.</p>
+              <div className="h-full overflow-y-auto space-y-5">
+                {/* Header */}
+                <div className="bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm flex items-start justify-between">
+                  <div>
+                    <h2 className="text-sm font-bold text-slate-900">Workspace Usage Analytics</h2>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Live data pulled from Supabase database tables.
+                      {usageData && (
+                        <span className="text-[10px] text-slate-400 ml-2 font-mono">
+                          Last synced: {new Date(usageData.generatedAt).toLocaleTimeString()}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  <Button
+                    onClick={fetchUsage}
+                    disabled={usageLoading}
+                    variant="outline"
+                    className="border-[#e5e7eb] hover:bg-[#f9fafb] text-xs h-7 text-[#374151] font-semibold"
+                  >
+                    {usageLoading ? "Syncing..." : "↻ Refresh"}
+                  </Button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="border border-slate-100 p-4 rounded-lg bg-slate-50">
-                    <p className="text-[10px] text-slate-400 font-bold uppercase">DB Queries</p>
-                    <p className="text-xl font-extrabold text-slate-950 mt-1">42,912</p>
-                    <span className="text-[9px] text-emerald-600 font-semibold">↑ 12% from last week</span>
+                {usageLoading && !usageData ? (
+                  <div className="bg-white border border-[#e5e7eb] rounded-lg p-12 flex flex-col items-center text-slate-400 text-xs">
+                    <div className="h-6 w-6 border-2 border-[#3ecf8e] border-t-transparent rounded-full animate-spin mb-3" />
+                    Querying Supabase tables for live usage data...
                   </div>
-                  <div className="border border-slate-100 p-4 rounded-lg bg-slate-50">
-                    <p className="text-[10px] text-slate-400 font-bold uppercase">Google API Hits</p>
-                    <p className="text-xl font-extrabold text-slate-950 mt-1">1,402</p>
-                    <span className="text-[9px] text-slate-400 font-semibold">Within free tier bounds</span>
-                  </div>
-                  <div className="border border-slate-100 p-4 rounded-lg bg-slate-50">
-                    <p className="text-[10px] text-slate-400 font-bold uppercase">Network Egress</p>
-                    <p className="text-xl font-extrabold text-slate-950 mt-1">47.4 MB</p>
-                    <span className="text-[9px] text-emerald-600 font-semibold">0.9% of total 5GB limit</span>
-                  </div>
-                </div>
-
-                {/* Mock Chart Area */}
-                <div className="border border-[#e5e7eb] rounded-lg p-6 bg-slate-50/50 flex flex-col justify-between h-56">
-                  <p className="text-xs font-bold text-slate-700">Compute Load Profile (Last 24 Hours)</p>
-                  <div className="flex items-end gap-1.5 h-36 pt-4">
-                    {[12, 18, 15, 30, 45, 20, 25, 40, 60, 50, 75, 90, 85, 60, 40, 55, 70, 65, 80, 75, 60, 95, 110, 80].map((val, idx) => (
-                      <div key={idx} className="flex-1 flex flex-col items-center gap-1 group">
-                        <div className="w-full bg-[#3ecf8e]/80 group-hover:bg-[#3ecf8e] rounded-t-sm transition-all" style={{ height: `${val * 0.8}px` }} />
-                        <span className="text-[8px] text-slate-400 hidden md:inline">{idx}h</span>
+                ) : (
+                  <>
+                    {/* ── Row 1: Event & Record Counts ── */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div className="bg-white border border-[#e5e7eb] p-4 rounded-lg shadow-sm space-y-1">
+                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">System Events</p>
+                        <p className="text-2xl font-extrabold text-slate-950">
+                          {usageData?.totalEvents.toLocaleString() ?? "—"}
+                        </p>
+                        <div className="flex items-center gap-1">
+                          {(usageData?.weeklyChangePercent ?? 0) >= 0 ? (
+                            <span className="text-[9px] text-emerald-600 font-bold">
+                              ↑ {Math.abs(usageData?.weeklyChangePercent ?? 0)}% this week
+                            </span>
+                          ) : (
+                            <span className="text-[9px] text-red-500 font-bold">
+                              ↓ {Math.abs(usageData?.weeklyChangePercent ?? 0)}% this week
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[9px] text-slate-400">Total rows in system_events</p>
                       </div>
-                    ))}
-                  </div>
-                </div>
+
+                      <div className="bg-white border border-[#e5e7eb] p-4 rounded-lg shadow-sm space-y-1">
+                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Sprint Tasks</p>
+                        <p className="text-2xl font-extrabold text-slate-950">
+                          {usageData?.totalTasks.toLocaleString() ?? "—"}
+                        </p>
+                        <p className="text-[9px] text-amber-600 font-semibold">
+                          {usageData?.overdueTasks ?? 0} overdue / critical
+                        </p>
+                        <p className="text-[9px] text-slate-400">Total rows in sprint_tasks</p>
+                      </div>
+
+                      <div className="bg-white border border-[#e5e7eb] p-4 rounded-lg shadow-sm space-y-1">
+                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Team Members</p>
+                        <p className="text-2xl font-extrabold text-slate-950">
+                          {usageData?.totalMembers.toLocaleString() ?? "—"}
+                        </p>
+                        <p className="text-[9px] text-emerald-600 font-semibold">Registered in corporate registry</p>
+                        <p className="text-[9px] text-slate-400">Total rows in team_members</p>
+                      </div>
+
+                      <div className="bg-white border border-[#e5e7eb] p-4 rounded-lg shadow-sm space-y-1">
+                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Active Projects</p>
+                        <p className="text-2xl font-extrabold text-slate-950">
+                          {usageData?.totalProjects.toLocaleString() ?? "—"}
+                        </p>
+                        <p className="text-[9px] text-emerald-600 font-semibold">Linked GitHub repos</p>
+                        <p className="text-[9px] text-slate-400">Total rows in active_projects</p>
+                      </div>
+                    </div>
+
+                    {/* ── Row 2: Week-over-Week Comparison ── */}
+                    <div className="bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm">
+                      <h3 className="text-xs font-bold text-slate-900 mb-4">Week-over-Week Event Activity</h3>
+                      <div className="grid grid-cols-2 gap-6">
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center">
+                            <span className="text-[10px] font-bold text-slate-600 uppercase">This Week</span>
+                            <span className="text-sm font-extrabold text-slate-950">{(usageData?.thisWeekEvents ?? 0).toLocaleString()}</span>
+                          </div>
+                          <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                            <div
+                              className="bg-[#3ecf8e] h-full rounded-full transition-all duration-700"
+                              style={{
+                                width: usageData && (usageData.thisWeekEvents + usageData.lastWeekEvents) > 0
+                                  ? `${(usageData.thisWeekEvents / (usageData.thisWeekEvents + usageData.lastWeekEvents)) * 100}%`
+                                  : "0%"
+                              }}
+                            />
+                          </div>
+                          <p className="text-[9px] text-slate-400">Events logged in the past 7 days</p>
+                        </div>
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center">
+                            <span className="text-[10px] font-bold text-slate-600 uppercase">Last Week</span>
+                            <span className="text-sm font-extrabold text-slate-950">{(usageData?.lastWeekEvents ?? 0).toLocaleString()}</span>
+                          </div>
+                          <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                            <div
+                              className="bg-slate-300 h-full rounded-full transition-all duration-700"
+                              style={{
+                                width: usageData && (usageData.thisWeekEvents + usageData.lastWeekEvents) > 0
+                                  ? `${(usageData.lastWeekEvents / (usageData.thisWeekEvents + usageData.lastWeekEvents)) * 100}%`
+                                  : "0%"
+                              }}
+                            />
+                          </div>
+                          <p className="text-[9px] text-slate-400">Events logged in the 7 days prior</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* ── Row 3: Real Hourly Event Chart ── */}
+                    <div className="bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm">
+                      <div className="flex items-center justify-between mb-4">
+                        <div>
+                          <h3 className="text-xs font-bold text-slate-900">System Event Distribution (Last 24 Hours)</h3>
+                          <p className="text-[10px] text-slate-400 mt-0.5">Each bar = 1 hour of system_events timestamps from Supabase</p>
+                        </div>
+                        <span className="text-[10px] font-mono bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded">
+                          {(usageData?.hourlyCounts ?? []).reduce((a, b) => a + b, 0)} events
+                        </span>
+                      </div>
+                      {(() => {
+                        const counts = usageData?.hourlyCounts ?? Array(24).fill(0);
+                        const maxVal = Math.max(...counts, 1); // avoid division by zero
+                        const now = new Date();
+                        return (
+                          <div className="flex items-end gap-1 h-40">
+                            {counts.map((val, idx) => {
+                              const hourLabel = new Date(now.getTime() - (23 - idx) * 60 * 60 * 1000)
+                                .getHours()
+                                .toString()
+                                .padStart(2, "0") + "h";
+                              const heightPct = Math.max((val / maxVal) * 100, val > 0 ? 4 : 1);
+                              return (
+                                <div key={idx} className="flex-1 flex flex-col items-center gap-1 group relative">
+                                  {/* Tooltip */}
+                                  <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[9px] font-mono px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 pointer-events-none">
+                                    {val} event{val !== 1 ? "s" : ""} at {hourLabel}
+                                  </div>
+                                  <div
+                                    className={`w-full rounded-t-sm transition-all duration-500 ${
+                                      val === 0
+                                        ? "bg-slate-100"
+                                        : "bg-[#3ecf8e]/80 group-hover:bg-[#3ecf8e]"
+                                    }`}
+                                    style={{ height: `${heightPct}%` }}
+                                  />
+                                  <span className="text-[7px] text-slate-400 hidden md:inline">{hourLabel}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
+                      {(usageData?.hourlyCounts ?? []).every(v => v === 0) && (
+                        <p className="text-[10px] text-slate-400 text-center mt-2">
+                          No system events in the past 24 hours. Click "Mock Server Crash" to generate one.
+                        </p>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
