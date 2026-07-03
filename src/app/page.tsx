@@ -48,6 +48,21 @@ interface TeamMember {
   created_at: string;
 }
 
+interface GitHubRepo {
+  id: number;
+  name: string;
+  full_name: string;
+  html_url: string;
+  description: string | null;
+  private: boolean;
+  language: string | null;
+  stars: number;
+  forks: number;
+  open_issues: number;
+  default_branch: string;
+  pushed_at: string;
+}
+
 interface UsageData {
   totalEvents: number;
   totalTasks: number;
@@ -146,6 +161,11 @@ export default function Home() {
   // Active project selector (for agent context — like the model selector)
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
 
+  // Live GitHub repos fetched from GitHub API
+  const [githubRepos, setGithubRepos] = useState<GitHubRepo[]>([]);
+  const [githubReposLoading, setGithubReposLoading] = useState(false);
+  const [githubRepoSearch, setGithubRepoSearch] = useState("");
+
   // New Project Dialog State
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [newProjName, setNewProjName] = useState("");
@@ -180,6 +200,7 @@ export default function Home() {
     fetchProjects();
     fetchTeam();
     fetchUsage();
+    fetchGitHubRepos();
 
     if (typeof window !== "undefined") {
       // Restore selected model
@@ -292,6 +313,24 @@ export default function Home() {
       toast.error("Failed to load workspace usage stats.");
     } finally {
       setUsageLoading(false);
+    }
+  };
+
+  // Fetch live GitHub repositories from GitHub API via PAT
+  const fetchGitHubRepos = async () => {
+    try {
+      setGithubReposLoading(true);
+      const res = await fetch("/api/github/repos");
+      const data = await res.json();
+      if (res.ok) {
+        setGithubRepos(data.repos || []);
+      } else {
+        toast.error(`GitHub: ${data.error}`);
+      }
+    } catch {
+      toast.error("Failed to fetch GitHub repositories.");
+    } finally {
+      setGithubReposLoading(false);
     }
   };
 
@@ -2034,128 +2073,123 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* 2. Synced GitHub Repositories Panel */}
+                {/* 2. Live GitHub Repositories Panel */}
                 <div className="bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm space-y-4">
-                  <div>
-                    <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider text-slate-700">Active GitHub Repositories</h2>
-                    <p className="text-xs text-slate-500 mt-0.5">Repositories mapped to active database projects. Select the active project context for the agent.</p>
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider text-slate-700">GitHub Repositories</h2>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Live repos from your GitHub PAT. Select one as the active agent context.
+                        {githubRepos.length > 0 && (
+                          <span className="ml-2 text-[10px] font-mono bg-slate-100 text-slate-600 px-1.5 rounded">{githubRepos.length} repos found</span>
+                        )}
+                      </p>
+                    </div>
+                    <button
+                      onClick={fetchGitHubRepos}
+                      disabled={githubReposLoading}
+                      className="text-[11px] text-[#3ecf8e] font-bold hover:underline disabled:opacity-50"
+                    >
+                      {githubReposLoading ? "Fetching..." : "↻ Refresh"}
+                    </button>
                   </div>
 
-                  {/* Project Selector — mirrors the model selector UX */}
-                  {projects.length > 0 && (
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase">Agent Active Project Context</label>
-                      <select
-                        value={selectedProjectId}
-                        onChange={(e) => {
-                          const pid = e.target.value;
-                          setSelectedProjectId(pid);
-                          localStorage.setItem("ael_selected_project", pid);
-                          const proj = projects.find(p => p.project_id === pid);
-                          toast.success(`Agent context set to: ${proj?.project_name ?? pid}`);
-                        }}
-                        className="w-full border border-[#e5e7eb] bg-white text-xs text-slate-800 rounded-md h-9 px-3 font-mono shadow-sm focus:outline-none focus:ring-2 focus:ring-[#3ecf8e]/40"
-                      >
-                        <option value="">— Select active project —</option>
-                        {projects.map((p) => (
-                          <option key={p.project_id} value={p.project_id}>
-                            {p.project_name} — {p.github_repo_url}
-                          </option>
-                        ))}
-                      </select>
-
-                      {/* Scrollable clickable project list — like the model list */}
-                      <div className="border border-slate-100 rounded-md overflow-hidden bg-slate-50">
-                        <ScrollArea className="h-36">
-                          <div className="p-2 space-y-1">
-                            {projects.map((p) => (
-                              <div
-                                key={p.project_id}
-                                onClick={() => {
-                                  setSelectedProjectId(p.project_id);
-                                  localStorage.setItem("ael_selected_project", p.project_id);
-                                  toast.success(`Agent context: ${p.project_name}`);
-                                }}
-                                className={`text-[11px] px-2.5 py-2 rounded cursor-pointer transition-colors flex items-center justify-between ${
-                                  selectedProjectId === p.project_id
-                                    ? "bg-emerald-50 text-emerald-800 font-bold border border-emerald-100"
-                                    : "text-slate-600 hover:bg-slate-100"
-                                }`}
-                              >
-                                <div>
-                                  <span className="font-semibold">{p.project_name}</span>
-                                  <span className="text-slate-400 font-mono text-[10px] ml-2">{p.github_repo_url}</span>
-                                </div>
-                                {selectedProjectId === p.project_id && (
-                                  <span className="text-[10px] text-emerald-600 font-bold shrink-0">✓ Active</span>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </ScrollArea>
-                      </div>
-                    </div>
+                  {/* Search */}
+                  {githubRepos.length > 0 && (
+                    <Input
+                      value={githubRepoSearch}
+                      onChange={(e) => setGithubRepoSearch(e.target.value)}
+                      placeholder="Search repositories..."
+                      className="bg-white border-[#e5e7eb] text-xs h-8 rounded text-black"
+                    />
                   )}
 
-                  {/* Read-only repo table */}
-                  <div className="space-y-2">
-                    {projectsLoading ? (
-                      <p className="text-xs text-slate-400 py-4 text-center">Checking project repositories...</p>
-                    ) : projects.length === 0 ? (
-                      <p className="text-xs text-slate-400 py-4 text-center">No repositories mapped. Register a project first.</p>
-                    ) : (
-                      <div className="border border-slate-100 rounded-lg overflow-hidden">
-                        <Table>
-                          <TableHeader className="bg-slate-50">
-                            <TableRow className="border-[#e5e7eb]">
-                              <TableHead className="text-[10px] font-bold text-slate-500 uppercase">Project</TableHead>
-                              <TableHead className="text-[10px] font-bold text-slate-500 uppercase">Git Repository URL</TableHead>
-                              <TableHead className="text-[10px] font-bold text-slate-500 uppercase">Sync Status</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {projects.map((p) => (
-                              <TableRow
-                                key={p.project_id}
-                                className={`border-[#e5e7eb] cursor-pointer transition-colors ${
-                                  selectedProjectId === p.project_id ? "bg-emerald-50" : "hover:bg-slate-50"
-                                }`}
-                                onClick={() => {
-                                  setSelectedProjectId(p.project_id);
-                                  localStorage.setItem("ael_selected_project", p.project_id);
-                                  toast.success(`Agent context: ${p.project_name}`);
-                                }}
-                              >
-                                <TableCell className="font-bold text-xs text-slate-900">
-                                  <div className="flex items-center gap-1.5">
-                                    {selectedProjectId === p.project_id && (
-                                      <span className="w-1.5 h-1.5 rounded-full bg-[#3ecf8e]" />
+                  {/* Repo list */}
+                  {githubReposLoading && githubRepos.length === 0 ? (
+                    <div className="flex items-center gap-2 text-xs text-slate-400 py-6 justify-center">
+                      <div className="h-4 w-4 border-2 border-[#3ecf8e] border-t-transparent rounded-full animate-spin" />
+                      Fetching repositories from GitHub API...
+                    </div>
+                  ) : githubRepos.length === 0 ? (
+                    <p className="text-xs text-slate-400 py-4 text-center">
+                      No repositories found. Check that GITHUB_PAT is set in .env.local
+                    </p>
+                  ) : (
+                    <div className="border border-slate-100 rounded-md overflow-hidden bg-slate-50">
+                      <ScrollArea className="h-64">
+                        <div className="p-2 space-y-1">
+                          {githubRepos
+                            .filter(r =>
+                              r.full_name.toLowerCase().includes(githubRepoSearch.toLowerCase()) ||
+                              (r.description || "").toLowerCase().includes(githubRepoSearch.toLowerCase())
+                            )
+                            .map((repo) => {
+                              const isActive = selectedProjectId === String(repo.id);
+                              return (
+                                <div
+                                  key={repo.id}
+                                  onClick={() => {
+                                    setSelectedProjectId(String(repo.id));
+                                    localStorage.setItem("ael_selected_project", String(repo.id));
+                                    localStorage.setItem("ael_selected_repo_url", repo.html_url);
+                                    localStorage.setItem("ael_selected_repo_name", repo.full_name);
+                                    toast.success(`Agent context: ${repo.full_name}`);
+                                  }}
+                                  className={`px-3 py-2.5 rounded cursor-pointer transition-colors flex items-start justify-between gap-3 ${
+                                    isActive
+                                      ? "bg-emerald-50 border border-emerald-100"
+                                      : "hover:bg-slate-100"
+                                  }`}
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2">
+                                      {isActive && <span className="w-1.5 h-1.5 rounded-full bg-[#3ecf8e] shrink-0" />}
+                                      <span className={`text-[11px] font-mono font-bold truncate ${
+                                        isActive ? "text-emerald-800" : "text-slate-800"
+                                      }`}>
+                                        {repo.full_name}
+                                      </span>
+                                      {repo.private && (
+                                        <span className="text-[9px] bg-slate-200 text-slate-600 px-1 rounded font-semibold shrink-0">Private</span>
+                                      )}
+                                    </div>
+                                    {repo.description && (
+                                      <p className="text-[10px] text-slate-400 mt-0.5 truncate">{repo.description}</p>
                                     )}
-                                    {p.project_name}
+                                    <div className="flex items-center gap-3 mt-1 text-[9px] text-slate-400">
+                                      {repo.language && <span>{repo.language}</span>}
+                                      <span>★ {repo.stars}</span>
+                                      <span>⑂ {repo.forks}</span>
+                                      {repo.open_issues > 0 && (
+                                        <span className="text-amber-500">● {repo.open_issues} open issues</span>
+                                      )}
+                                      <span>Pushed {new Date(repo.pushed_at).toLocaleDateString()}</span>
+                                    </div>
                                   </div>
-                                </TableCell>
-                                <TableCell className="font-mono text-xs text-emerald-600">
-                                  <a href={p.github_repo_url} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
-                                    {p.github_repo_url}
-                                    <svg className="w-3 h-3 text-slate-400 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                                      <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                                    </svg>
-                                  </a>
-                                </TableCell>
-                                <TableCell>
-                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-100">
-                                    <span className="w-1 h-1 bg-[#3ecf8e] rounded-full animate-ping" />
-                                    {selectedProjectId === p.project_id ? "Active Context" : "Synced"}
-                                  </span>
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </div>
-                    )}
-                  </div>
+                                  <div className="shrink-0 flex flex-col items-end gap-1">
+                                    {isActive && (
+                                      <span className="text-[9px] text-emerald-600 font-bold">✓ Active</span>
+                                    )}
+                                    <a
+                                      href={repo.html_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      onClick={e => e.stopPropagation()}
+                                      className="text-[9px] text-slate-400 hover:text-[#3ecf8e] hover:underline"
+                                    >
+                                      Open ↗
+                                    </a>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          }
+                        </div>
+                      </ScrollArea>
+                    </div>
+                  )}
                 </div>
+
 
               </div>
             )}
