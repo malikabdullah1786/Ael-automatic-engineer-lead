@@ -830,13 +830,11 @@ async function jiraStatusNode(state: typeof AgentState.State, config?: any) {
 }
 
 async function fetchAlertNode(state: typeof AgentState.State) {
-  // Fetch active ticket project IDs (where status is Open or Resolved)
+  // Fetch active ticket details (where status is Open or Resolved)
   const { data: activeTickets } = await supabase
     .from("incident_tickets")
-    .select("project_id")
+    .select("project_id, error_context")
     .in("status", ["Open", "Resolved"]);
-
-  const activeProjectIds = activeTickets ? activeTickets.map((t: any) => t.project_id) : [];
 
   // Fetch recent system events
   const { data: events, error } = await supabase
@@ -857,11 +855,26 @@ async function fetchAlertNode(state: typeof AgentState.State) {
     };
   }
 
-  // Find the most recent event that is NOT triaged (i.e. neither event_id nor project_id is in activeProjectIds)
-  const event = events.find((e: any) => 
-    !activeProjectIds.includes(e.event_id) && 
-    !activeProjectIds.includes(e.project_id)
-  );
+  // Find the most recent event that is NOT triaged.
+  // We consider an event triaged if there is an active ticket whose error_context contains the event's error trace.
+  const event = events.find((e: any) => {
+    if (!e.error_trace) return false;
+
+    // Check if any open ticket matches this project and has a similar error trace
+    const alreadyHasTicket = activeTickets?.some((t: any) => {
+      if (t.project_id !== e.project_id) return false;
+      if (!t.error_context) return false;
+      
+      const cleanTrace = e.error_trace.trim();
+      const cleanContext = t.error_context.trim();
+      
+      // Check if context contains a significant portion of the trace
+      const traceSnippet = cleanTrace.substring(0, 100);
+      return cleanContext.includes(traceSnippet) || cleanTrace.includes(cleanContext);
+    });
+
+    return !alreadyHasTicket;
+  });
 
   if (!event) {
     return {
@@ -1576,6 +1589,26 @@ async function prepActionNode(state: typeof AgentState.State) {
     }
   };
 
+  // Fetch project details to check if Jira key is configured
+  let projectInfo = null;
+  try {
+    const { data } = await supabase
+      .from("active_projects")
+      .select("project_name, jira_project_key")
+      .eq("project_id", state.projectId)
+      .single();
+    projectInfo = data;
+  } catch (err) {
+    console.error("Failed to query project details in prepActionNode:", err);
+  }
+
+  const jiraKey = projectInfo?.jira_project_key || null;
+  const projectName = projectInfo?.project_name || "Unknown Project";
+
+  const jiraAction = jiraKey
+    ? `File incident ticket, create Jira issue in project **${jiraKey}**, & schedule a 15-minute Google Meet.`
+    : `File incident ticket & schedule a 15-minute Google Meet. *(Note: Jira ticket will be skipped because no Jira Project Key is linked to this project. You can link a key to this project card via the Projects tab in the UI).*`;
+
   // Check database for meeting conflict
   let conflictWarning = "";
   if (state.devId) {
@@ -1600,7 +1633,7 @@ async function prepActionNode(state: typeof AgentState.State) {
     interruptionReason: "human_approval_required",
     messages: [{
       role: "assistant",
-      content: `📋 **Incident Action Drafted:**\n- **Project ID:** ${state.projectId}\n- **Assignee:** ${state.devName} (${state.devEmail})\n- **Meeting Time:** \`${startTime.toLocaleString()}\`\n- **Triage Action:** File incident ticket & schedule a 15-minute Google Meet.${conflictWarning}\n\nShould I execute this action? (Type **yes** to approve, or **no** to cancel)`
+      content: `📋 **Incident Action Drafted:**\n- **Project:** ${projectName} (ID: ${state.projectId})\n- **Assignee:** ${state.devName} (${state.devEmail})\n- **Meeting Time:** \`${startTime.toLocaleString()}\`\n- **Triage Action:** ${jiraAction}${conflictWarning}\n\nShould I execute this action? (Type **yes** to approve, or **no** to cancel)`
     }]
   };
 }
@@ -1623,7 +1656,7 @@ async function executeActionNode(state: typeof AgentState.State) {
         actionApproved: null,
         pendingAction: null,
         interruptionReason: null,
-        meetingTime: state.meetingTime,
+        meetingTime: null,
         messages: [{
           role: "assistant",
           content: `${currentMsg}\n\n--- \n\nInitiating scheduling workflow for next critical overdue task: **${nextTask.task_title}**.`
@@ -1650,6 +1683,7 @@ async function executeActionNode(state: typeof AgentState.State) {
       actionApproved: null,
       interruptionReason: null,
       intent: null,
+      meetingTime: null,
       messages: [{ role: "assistant", content: cancelMsg }]
     };
   }
@@ -1666,7 +1700,8 @@ async function executeActionNode(state: typeof AgentState.State) {
       pendingAction: null,
       actionApproved: null,
       interruptionReason: null,
-      intent: null
+      intent: null,
+      meetingTime: null
     };
   }
 
@@ -1765,6 +1800,7 @@ async function executeActionNode(state: typeof AgentState.State) {
         actionApproved: null,
         interruptionReason: null,
         intent: null,
+        meetingTime: null,
         messages: [{ role: "assistant", content: calendarErrorMsg }]
       };
     }
@@ -1790,6 +1826,7 @@ async function executeActionNode(state: typeof AgentState.State) {
       actionApproved: null,
       interruptionReason: null,
       intent: null,
+      meetingTime: null,
       messages: [{ role: "assistant", content: successMsg }]
     };
 
@@ -1812,6 +1849,7 @@ async function executeActionNode(state: typeof AgentState.State) {
       actionApproved: null,
       interruptionReason: null,
       intent: null,
+      meetingTime: null,
       messages: [{ role: "assistant", content: generalErrorMsg }]
     };
   }
@@ -1875,7 +1913,7 @@ function determineIdentityRoute(state: typeof AgentState.State) {
   if (state.interruptionReason) {
     return END;
   }
-  if (state.devEmail && state.errorTrace) {
+  if (state.devEmail) {
     const lastMessage = state.messages[state.messages.length - 1]?.content || "";
     const responseLower = lastMessage.toLowerCase().trim();
     if (responseLower === "yes" || responseLower === "yes proceed" || responseLower === "proceed") {

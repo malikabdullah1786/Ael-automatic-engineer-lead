@@ -128,11 +128,17 @@ export class JiraService implements IJiraService {
       accountId = await this.findUserAccountId(resolved.host, authHeader, assigneeEmail);
     }
 
+    // Sanitize summary to avoid newlines and limit length (Jira limit is 255 chars)
+    let cleanSummary = summary.replace(/[\r\n]+/g, " ").trim();
+    if (cleanSummary.length > 250) {
+      cleanSummary = cleanSummary.substring(0, 247) + "...";
+    }
+
     const fields: any = {
       project: {
         key: projectKey.toUpperCase(),
       },
-      summary,
+      summary: cleanSummary,
       description: {
         type: "doc",
         version: 1,

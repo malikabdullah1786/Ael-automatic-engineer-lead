@@ -128,3 +128,30 @@ $RECYCLE.BIN/
 *.orig
 .cache/
 dist/
+
+# -----------------------------------------------------------------------------
+# 15. TEST & REMEDIATION SCRIPTS
+#     One-off test and debug scripts at root or /scratch level.
+# -----------------------------------------------------------------------------
+test_*.ts
+test_*.js
+debug_*.ts
+debug_*.js
+mock_*.ts
+mock_*.js
+check_db.js
+/scratch/
+
+# -----------------------------------------------------------------------------
+# 16. BRAIN / AGENT CONTEXT DIRECTORY
+#     Contains AI agent scratch notes, state logs, and conversation artifacts.
+#     Not production code — should not be committed.
+# -----------------------------------------------------------------------------
+/brain/
+
+# -----------------------------------------------------------------------------
+# 17. TYPESCRIPT BUILD CACHE
+#     Build info files are local incremental caches, not source code.
+# -----------------------------------------------------------------------------
+tsconfig.tsbuildinfo
+*.tsbuildinfo

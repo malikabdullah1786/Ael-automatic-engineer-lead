@@ -78,8 +78,12 @@ export class GitHubService implements IVersionControlService {
       return commitList;
     } catch (error: any) {
       console.error(`GitHub API error while fetching commits for ${owner}/${repo}:`, error);
-      if (error.status === 403 || error.message.includes("rate limit")) {
+      if (error.status === 403 || error.message?.includes("rate limit")) {
         throw new Error("GITHUB_RATE_LIMIT_EXCEEDED");
+      }
+      if (error.status === 404) {
+        // Repo doesn't exist, is private, or hasn't been linked yet — treat as no commits
+        throw new Error("GITHUB_REPO_NOT_FOUND");
       }
       throw new Error(`GitHub API failure: ${error.message}`);
     }

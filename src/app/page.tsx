@@ -35,6 +35,7 @@ interface Project {
   github_repo_url: string;
   created_at: string;
   status?: "active" | "paused" | "completed";
+  jira_project_key?: string | null;
   region?: string;
   size?: string;
 }
@@ -142,6 +143,7 @@ export default function Home() {
   };
   const switchTab = (tab: "projects" | "chat" | "team" | "integrations" | "usage" | "billing" | "settings") => {
     setActiveTab(tab);
+    setIsSidebarOpen(false); // Close sidebar on mobile when navigating
     if (typeof window !== "undefined") localStorage.setItem("ael_active_tab", tab);
   };
 
@@ -180,6 +182,8 @@ export default function Home() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [activeProjectCommits, setActiveProjectCommits] = useState<any[]>([]);
   const [activeProjectCommitsLoading, setActiveProjectCommitsLoading] = useState(false);
+  const [editingJiraProjectId, setEditingJiraProjectId] = useState<string | null>(null);
+  const [editingJiraKeyVal, setEditingJiraKeyVal] = useState<string>("");
 
   // Live GitHub repos fetched from GitHub API
   const [githubRepos, setGithubRepos] = useState<GitHubRepo[]>([]);
@@ -193,6 +197,7 @@ export default function Home() {
   const [newProjRegion, setNewProjRegion] = useState("us-east-1");
   const [newProjSize, setNewProjSize] = useState("NANO");
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [newProjJiraKey, setNewProjJiraKey] = useState("");
 
   // New Team Member Dialog State
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
@@ -213,6 +218,9 @@ export default function Home() {
   const [threadId, setThreadId] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [interruptionReason, setInterruptionReason] = useState<string | null>(null);
+
+  // Mobile sidebar toggle
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const [inputMessage, setInputMessage] = useState("");
   const [sendingMessage, setSendingMessage] = useState(false);
@@ -527,6 +535,29 @@ export default function Home() {
     }
   };
 
+  // Inline-edit Jira project key for a project card
+  const handleSaveJiraKey = async (projectId: string, key: string) => {
+    const trimmedKey = key.trim().toUpperCase();
+    try {
+      const res = await fetch("/api/projects", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId, jira_project_key: trimmedKey || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Failed to save Jira key.");
+        return;
+      }
+      setProjects(prev =>
+        prev.map(p => p.project_id === projectId ? { ...p, jira_project_key: trimmedKey || null } : p)
+      );
+      toast.success(trimmedKey ? `Jira key set to "${trimmedKey}"` : "Jira key cleared.");
+    } catch (err: any) {
+      toast.error(`Error saving Jira key: ${err.message}`);
+    }
+  };
+
   // Select/Add Github Repository as a project in DB
   const handleSelectGithubRepoAsProject = async (repo: GitHubRepo) => {
     try {
@@ -602,7 +633,8 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: newProjName.trim(),
-          github_repo_url: newProjRepo.trim()
+          github_repo_url: newProjRepo.trim(),
+          jira_project_key: newProjJiraKey.trim().toUpperCase() || null
         })
       });
       const data = await res.json();
@@ -611,6 +643,7 @@ export default function Home() {
         setIsNewProjectOpen(false);
         setNewProjName("");
         setNewProjRepo("");
+        setNewProjJiraKey("");
         fetchProjects();
       } else {
         toast.error(data.error || "Failed to create project.");
@@ -800,6 +833,7 @@ export default function Home() {
           message: msgText,
           threadId,
           modelName: selectedModel, // Pass model dynamically
+          history: updatedMessages,
         }),
       });
 
@@ -831,7 +865,8 @@ export default function Home() {
       role: "user",
       content: approve ? "[Approved Triage Action]" : "[Rejected Action]",
     };
-    updateSessionData([...messages, userMessage], null);
+    const updatedMessages = [...messages, userMessage];
+    updateSessionData(updatedMessages, null);
 
     try {
       const res = await fetch("/api/agent", {
@@ -841,6 +876,7 @@ export default function Home() {
           threadId,
           approvalDecision: approve ? "approve" : "reject",
           modelName: selectedModel, // Pass model dynamically
+          history: updatedMessages,
         }),
       });
 
@@ -869,7 +905,8 @@ export default function Home() {
     setCustomEmail("");
     setSendingMessage(true);
     const userMessage: ChatMessage = { role: "user", content: email };
-    updateSessionData([...messages, userMessage], null);
+    const updatedMessages = [...messages, userMessage];
+    updateSessionData(updatedMessages, null);
 
     try {
       const res = await fetch("/api/agent", {
@@ -879,6 +916,7 @@ export default function Home() {
           threadId,
           emailInput: email,
           modelName: selectedModel, // Pass model dynamically
+          history: updatedMessages,
         }),
       });
 
@@ -978,7 +1016,6 @@ export default function Home() {
             </div>
             <div>
               <span className="font-bold text-slate-900 tracking-tight text-base">AEL Autonomous Engineering Lead</span>
-              <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono ml-2">v1.5.0</span>
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -1199,6 +1236,42 @@ export default function Home() {
           <span>{"\u00A9"} 2026. All Rights Reserved.</span>
         </footer>
 
+        {/* Floating Chat Copilot Button */}
+        <div className="fixed bottom-6 right-6 z-50">
+          <button
+            onClick={() => {
+              switchTab("chat");
+              navigateTo("app");
+            }}
+            className="group relative flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-tr from-[#3ecf8e] to-[#45e09d] text-white shadow-xl hover:shadow-emerald-200/50 hover:scale-105 active:scale-95 transition-all duration-300 cursor-pointer"
+            title="Chat with AEL Copilot"
+          >
+            {/* Pulsing glow ring around it */}
+            <span className="absolute -inset-1 rounded-full bg-[#3ecf8e]/20 blur opacity-75 group-hover:opacity-100 group-hover:-inset-1.5 transition-all duration-300 animate-pulse"></span>
+            
+            {/* Main Icon */}
+            <svg
+              className="relative w-7 h-7 text-white transition-transform group-hover:rotate-6"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+              />
+            </svg>
+
+            {/* Small badge or dot */}
+            <span className="absolute top-0 right-0 flex h-3.5 w-3.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500 border-2 border-white"></span>
+            </span>
+          </button>
+        </div>
+
       </div>
     );
   }
@@ -1211,9 +1284,51 @@ export default function Home() {
       <div className="flex h-screen bg-[#fcfcfc] text-[#1c1c1c] font-sans antialiased overflow-hidden">
         
         {/* ========================================================================= */}
+        {/* MOBILE TOP BAR — visible only on small screens                             */}
+        {/* ========================================================================= */}
+        <div className="md:hidden fixed top-0 left-0 right-0 h-14 bg-white border-b border-[#e5e7eb] flex items-center justify-between px-4 z-40 shadow-sm">
+          <div className="flex items-center gap-2">
+            <svg className="w-5 h-5 text-[#3ecf8e] fill-current" viewBox="0 0 24 24">
+              <path d="M21.36 9.8a1.05 1.05 0 00-1-1H14.1l2.5-6.83a1.05 1.05 0 00-1.85-.92L5.87 11.23a1.05 1.05 0 00.78 1.77h6.26l-2.5 6.83a1.05 1.05 0 001.85.92L21.23 11a1.05 1.05 0 00.13-1.2z" />
+            </svg>
+            <span className="text-sm font-bold tracking-tight text-[#111827]">AEL</span>
+          </div>
+          <button
+            onClick={() => setIsSidebarOpen(prev => !prev)}
+            className="p-2 rounded-md text-[#6b7280] hover:bg-[#f3f4f6] hover:text-[#111827] transition-all"
+            aria-label="Toggle sidebar"
+          >
+            {isSidebarOpen ? (
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            )}
+          </button>
+        </div>
+
+        {/* Mobile backdrop overlay */}
+        {isSidebarOpen && (
+          <div
+            className="md:hidden fixed inset-0 bg-black/40 z-30"
+            onClick={() => setIsSidebarOpen(false)}
+          />
+        )}
+
+        {/* ========================================================================= */}
         {/* 1. LEFT SIDEBAR: SUPABASE LOGO & TAB NAVIGATION                           */}
         {/* ========================================================================= */}
-        <aside className="w-60 bg-white border-r border-[#e5e7eb] flex flex-col justify-between shrink-0 z-20">
+        {/* Desktop: static sidebar. Mobile: slide-in overlay */}
+        <aside className={`
+          fixed md:static inset-y-0 left-0 z-40
+          w-72 md:w-60 bg-white border-r border-[#e5e7eb] flex flex-col justify-between shrink-0
+          transform transition-transform duration-300 ease-in-out
+          ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+          top-0 md:top-auto
+        `}>
           <div>
             {/* Top Logo Panel */}
             <div className="h-14 border-b border-[#e5e7eb] flex items-center px-4">
@@ -1364,32 +1479,33 @@ export default function Home() {
 
 
           {/* Top Header Bar */}
-          <header className="h-14 border-b border-[#e5e7eb] flex items-center justify-between px-6 bg-white shrink-0">
+          <header className="h-14 border-b border-[#e5e7eb] flex items-center justify-between px-4 md:px-6 bg-white shrink-0 mt-14 md:mt-0">
             {/* Breadcrumb path */}
             <div className="flex items-center gap-2 text-xs font-medium">
-              <span className="text-[#6b7280]">AEL</span>
-              <span className="text-[#d1d5db]">/</span>
+              <span className="text-[#6b7280] hidden sm:inline">AEL</span>
+              <span className="text-[#d1d5db] hidden sm:inline">/</span>
               <span className="text-[#111827] font-semibold capitalize">
-                {activeTab === "projects" ? "Projects Dashboard" : activeTab === "chat" ? "AEL Co-Pilot Chat" : activeTab}
+                {activeTab === "projects" ? "Projects" : activeTab === "chat" ? "Co-Pilot" : activeTab}
               </span>
             </div>
 
             {/* Right Header actions */}
-            <div className="flex items-center gap-3">
-              {/* Database Pulse Dot */}
-              <div className="flex items-center gap-1.5 bg-[#f9fafb] border border-[#e5e7eb] rounded px-2.5 py-1 text-[11px] font-semibold text-emerald-600">
+            <div className="flex items-center gap-1.5 sm:gap-3">
+              {/* Database Pulse Dot — hidden on very small screens */}
+              <div className="hidden sm:flex items-center gap-1.5 bg-[#f9fafb] border border-[#e5e7eb] rounded px-2.5 py-1 text-[11px] font-semibold text-emerald-600">
                 <span className="h-1.5 w-1.5 rounded-full bg-[#3ecf8e] animate-pulse" />
-                Supabase Connection Active
+                <span className="hidden md:inline">Supabase Connection Active</span>
+                <span className="md:hidden">Live</span>
               </div>
 
-              <div className="h-4 w-[1px] bg-[#e5e7eb]" />
+              <div className="h-4 w-[1px] bg-[#e5e7eb] hidden sm:block" />
 
               <Button
                 onClick={handleMockServerCrash}
                 disabled={inserting}
-                className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white text-[11px] font-bold h-8 px-3 rounded shadow-sm transition-all"
+                className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white text-[10px] sm:text-[11px] font-bold h-7 sm:h-8 px-2 sm:px-3 rounded shadow-sm transition-all"
               >
-                {inserting ? "Syncing..." : "Mock Server Crash"}
+                {inserting ? "Syncing..." : <><span className="hidden sm:inline">Mock </span>Crash</>}
               </Button>
 
               <Button
@@ -1398,9 +1514,9 @@ export default function Home() {
                   setTimeout(() => setShouldCrash(true), 500);
                 }}
                 variant="destructive"
-                className="bg-red-50 hover:bg-red-100 text-red-650 border border-red-200 text-[11px] font-bold h-8 px-3 rounded shadow-sm transition-all text-red-600"
+                className="bg-red-50 hover:bg-red-100 text-red-650 border border-red-200 text-[10px] sm:text-[11px] font-bold h-7 sm:h-8 px-2 sm:px-3 rounded shadow-sm transition-all text-red-600"
               >
-                Mock UI Crash
+                <span className="hidden sm:inline">Mock </span>UI Crash
               </Button>
             </div>
           </header>
@@ -1408,7 +1524,7 @@ export default function Home() {
           {/* ========================================================================= */}
           {/* 3. CORE WORKSPACE: PROJECTS, CHAT, TEAM, SETTINGS, ETC                    */}
           {/* ========================================================================= */}
-          <main className={`flex-1 flex flex-col min-h-0 p-6 relative bg-[#f9fafb] ${activeTab === "chat" ? "overflow-hidden" : "overflow-y-auto"}`}>
+          <main className={`flex-1 flex flex-col min-h-0 p-3 sm:p-4 md:p-6 relative bg-[#f9fafb] ${activeTab === "chat" ? "overflow-hidden" : "overflow-y-auto"}`}>
             {/* Custom scroll support applied dynamically */}
             
             {/* PROJECTS TAB */}
@@ -1511,7 +1627,7 @@ export default function Home() {
                             <div 
                               key={p.project_id}
                               onClick={() => handleSelectProject(p)}
-                              className={`cursor-pointer bg-white border rounded-lg p-4 shadow-sm hover:shadow-md transition-all flex flex-col justify-between h-40 ${
+                              className={`cursor-pointer bg-white border rounded-lg p-4 shadow-sm hover:shadow-md transition-all flex flex-col justify-between min-h-[12rem] h-auto pb-3 ${
                                 isActive 
                                   ? "border-[#3ecf8e] ring-2 ring-[#3ecf8e]/20 bg-emerald-50/5" 
                                   : p.status === "completed"
@@ -1549,11 +1665,66 @@ export default function Home() {
                               </span>
                             </div>
 
-                            <div className="mt-4">
+                            <div className="mt-3">
                               <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Repository</p>
                               <p className="text-xs text-slate-600 font-mono truncate mt-0.5" title={p.github_repo_url}>
                                 {p.github_repo_url}
                               </p>
+                            </div>
+
+                            <div className="mt-2 flex items-center justify-between text-xs" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex items-center gap-1.5 min-w-0 w-full">
+                                <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider shrink-0">Jira Key:</span>
+                                {editingJiraProjectId === p.project_id ? (
+                                  <div className="flex items-center gap-1 w-full max-w-[150px]">
+                                    <Input
+                                      value={editingJiraKeyVal}
+                                      onChange={(e) => setEditingJiraKeyVal(e.target.value)}
+                                      placeholder="e.g. PROJ"
+                                      className="h-6 text-[11px] px-1.5 py-0 border-[#e5e7eb] text-black uppercase font-mono font-bold w-full"
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          handleSaveJiraKey(p.project_id, editingJiraKeyVal);
+                                          setEditingJiraProjectId(null);
+                                        } else if (e.key === "Escape") {
+                                          setEditingJiraProjectId(null);
+                                        }
+                                      }}
+                                      autoFocus
+                                    />
+                                    <button
+                                      onClick={() => {
+                                        handleSaveJiraKey(p.project_id, editingJiraKeyVal);
+                                        setEditingJiraProjectId(null);
+                                      }}
+                                      className="text-emerald-600 hover:text-emerald-700 font-bold text-sm px-1"
+                                    >
+                                      ✓
+                                    </button>
+                                    <button
+                                      onClick={() => setEditingJiraProjectId(null)}
+                                      className="text-rose-600 hover:text-rose-700 font-bold text-sm px-1"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <span className={`font-mono text-[10px] font-bold ${p.jira_project_key ? "text-blue-700 bg-blue-50 border border-blue-150 px-1.5 py-0.5 rounded" : "text-slate-400 italic"}`}>
+                                      {p.jira_project_key || "None"}
+                                    </span>
+                                    <button
+                                      onClick={() => {
+                                        setEditingJiraProjectId(p.project_id);
+                                        setEditingJiraKeyVal(p.jira_project_key || "");
+                                      }}
+                                      className="text-slate-400 hover:text-slate-600 text-[10px] underline shrink-0 font-medium"
+                                    >
+                                      Edit
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                             </div>
 
                             <div className="flex justify-between items-center mt-3 pt-2.5 border-t border-[#e5e7eb]">
@@ -1602,6 +1773,7 @@ export default function Home() {
                             <TableRow className="border-[#e5e7eb]">
                               <TableHead className="text-[11px] font-bold text-[#6b7280]">Project Name</TableHead>
                               <TableHead className="text-[11px] font-bold text-[#6b7280]">Repository URL</TableHead>
+                              <TableHead className="text-[11px] font-bold text-[#6b7280]">Jira Key</TableHead>
                               <TableHead className="text-[11px] font-bold text-[#6b7280]">Status</TableHead>
                               <TableHead className="text-[11px] font-bold text-[#6b7280] text-right">Actions</TableHead>
                             </TableRow>
@@ -1619,6 +1791,57 @@ export default function Home() {
                                 >
                                 <TableCell className="font-bold text-xs text-slate-900">{p.project_name}</TableCell>
                                 <TableCell className="font-mono text-xs text-slate-600">{p.github_repo_url}</TableCell>
+                                <TableCell onClick={(e) => e.stopPropagation()}>
+                                  {editingJiraProjectId === p.project_id ? (
+                                    <div className="flex items-center gap-1">
+                                      <Input
+                                        value={editingJiraKeyVal}
+                                        onChange={(e) => setEditingJiraKeyVal(e.target.value)}
+                                        placeholder="e.g. PROJ"
+                                        className="h-6 text-[11px] px-1.5 py-0 border-[#e5e7eb] text-black uppercase font-mono font-bold w-20"
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") {
+                                            handleSaveJiraKey(p.project_id, editingJiraKeyVal);
+                                            setEditingJiraProjectId(null);
+                                          } else if (e.key === "Escape") {
+                                            setEditingJiraProjectId(null);
+                                          }
+                                        }}
+                                        autoFocus
+                                      />
+                                      <button
+                                        onClick={() => {
+                                          handleSaveJiraKey(p.project_id, editingJiraKeyVal);
+                                          setEditingJiraProjectId(null);
+                                        }}
+                                        className="text-emerald-600 hover:text-emerald-700 font-bold text-sm px-1"
+                                      >
+                                        ✓
+                                      </button>
+                                      <button
+                                        onClick={() => setEditingJiraProjectId(null)}
+                                        className="text-rose-600 hover:text-rose-700 font-bold text-sm px-1"
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center gap-1.5">
+                                      <span className={`font-mono text-[10px] font-bold ${p.jira_project_key ? "text-blue-700 bg-blue-50 border border-blue-150 px-1.5 py-0.5 rounded" : "text-slate-400 italic"}`}>
+                                        {p.jira_project_key || "None"}
+                                      </span>
+                                      <button
+                                        onClick={() => {
+                                          setEditingJiraProjectId(p.project_id);
+                                          setEditingJiraKeyVal(p.jira_project_key || "");
+                                        }}
+                                        className="text-slate-400 hover:text-slate-600 text-[10px] underline"
+                                      >
+                                        Edit
+                                      </button>
+                                    </div>
+                                  )}
+                                </TableCell>
                                 <TableCell>
                                   <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold border capitalize ${
                                     p.status === "completed"
@@ -1774,6 +1997,7 @@ export default function Home() {
                         </p>
                       </div>
                     ) : (
+                      <div className="overflow-x-auto">
                       <table className="w-full border-collapse text-left">
                         <thead className="bg-[#f9fafb] border-b border-[#e5e7eb] sticky top-0 z-10">
                           <tr>
@@ -1806,6 +2030,7 @@ export default function Home() {
                           ))}
                         </tbody>
                       </table>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -1815,10 +2040,10 @@ export default function Home() {
 
             {/* CO-PILOT CHAT CONSOLE TAB */}
             {activeTab === "chat" && (
-              <div className="flex-1 min-h-0 flex gap-4 overflow-hidden min-w-0">
+              <div className="flex-1 min-h-0 flex flex-col sm:flex-row gap-3 sm:gap-4 overflow-hidden min-w-0">
                 
                 {/* Chat Session History Left Column (Gemini Style) */}
-                <div className="w-56 bg-white border border-[#e5e7eb] rounded-lg flex flex-col overflow-hidden shrink-0 shadow-sm">
+                <div className="w-full sm:w-52 md:w-56 bg-white border border-[#e5e7eb] rounded-lg flex flex-col overflow-hidden shrink-0 shadow-sm max-h-40 sm:max-h-none">
                   {/* New Chat Button */}
                   <div className="p-3 border-b border-[#e5e7eb]">
                     <Button
@@ -2221,7 +2446,7 @@ export default function Home() {
                   ) : team.length === 0 ? (
                     <p className="text-xs text-slate-400 text-center py-10">No team members registered. Please run migrations/seed scripts.</p>
                   ) : (
-                    <div className="border border-[#e5e7eb] rounded-lg overflow-hidden">
+                    <div className="border border-[#e5e7eb] rounded-lg overflow-x-auto">
                       <Table>
                         <TableHeader className="bg-slate-50">
                           <TableRow className="border-[#e5e7eb]">
@@ -2390,31 +2615,31 @@ export default function Home() {
                     </div>
                   </div>
 
-                  {/* Slack Webhooks */}
+                  {/* Jira */}
                   <div className="bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm space-y-4">
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-lg bg-pink-50 text-pink-600 flex items-center justify-center font-bold text-lg">
-                          S
+                        <div className="w-9 h-9 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold text-lg">
+                          J
                         </div>
                         <div>
-                          <h3 className="text-xs font-bold text-slate-950">Slack Webhooks</h3>
-                          <span className="text-[9px] bg-yellow-50 text-yellow-800 border border-yellow-100 px-1.5 py-0.5 rounded font-bold">Standby</span>
+                          <h3 className="text-xs font-bold text-slate-950">Jira REST API</h3>
+                          <span className="text-[9px] bg-emerald-50 text-emerald-700 border border-emerald-100 px-1.5 py-0.2 rounded font-bold">Connected</span>
                         </div>
                       </div>
-                      <span className="text-[10px] text-slate-400 font-mono">Webhooks</span>
+                      <span className="text-[10px] text-slate-400 font-mono">REST v3</span>
                     </div>
                     <p className="text-xs text-slate-500 leading-relaxed">
-                      Sends automated reminders, warnings, and escalation alerts directly to team communication channels.
+                      Reads sprint boards and task statuses for all team members. Creates incident tickets and assigns them to developers during the triage workflow.
                     </p>
                     <div className="flex items-center justify-between pt-2 text-[11px] text-slate-400 border-t border-[#e5e7eb]">
-                       <span>Posts to SLACK_WEBHOOK_URL env var</span>
+                       <span>Calls /rest/agile/1.0 & /rest/api/3</span>
                        <button
-                         onClick={() => verifyIntegration("slack")}
-                         disabled={integrationChecking["slack"]}
+                         onClick={() => verifyIntegration("jira")}
+                         disabled={integrationChecking["jira"]}
                          className="text-[#3ecf8e] font-bold hover:underline disabled:opacity-50 disabled:cursor-wait"
                        >
-                         {integrationChecking["slack"] ? "Sending..." : "Send Test Alert"}
+                         {integrationChecking["jira"] ? "Verifying..." : "Verify Key"}
                        </button>
                     </div>
                   </div>
@@ -2935,7 +3160,16 @@ export default function Home() {
                 />
               </div>
 
-
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold text-slate-400 uppercase">Jira Project Key (Optional)</label>
+                <Input
+                  placeholder="e.g. PROJ"
+                  value={newProjJiraKey}
+                  onChange={(e) => setNewProjJiraKey(e.target.value)}
+                  className="bg-white border-[#e5e7eb] text-xs h-9 rounded text-black font-semibold uppercase"
+                />
+                <p className="text-[9px] text-slate-400">Maps incident alerts and tasks to this specific Jira project board.</p>
+              </div>
 
               <div className="flex gap-2 pt-2 justify-end">
                 <Button
