@@ -456,7 +456,19 @@ async function checkWorkloadNode(state: typeof AgentState.State) {
         }]
       };
     }
-    return {};
+    return {
+      projectId: null,
+      devId: null,
+      devName: null,
+      devEmail: null,
+      githubUsername: null,
+      errorTrace: null,
+      pendingAction: null,
+      actionApproved: null,
+      interruptionReason: null,
+      intent: null,
+      messages: [{ role: "assistant", content: "❌ **Triage skipped:** Target developer not found in the team directory." }]
+    };
   }
 
   const githubUser = member.github_username || state.githubUsername || "unmapped";
@@ -595,8 +607,17 @@ async function prepActionNode(state: typeof AgentState.State) {
   console.log("==> prepActionNode entered. state:", { projectId: state.projectId, devEmail: state.devEmail, devName: state.devName, pendingAction: !!state.pendingAction, actionApproved: state.actionApproved });
   if (!state.projectId || !state.devEmail || !state.devName) {
     return {
-      messages: [{ role: "assistant", content: "Error: Missing telemetry values to prepare incident assignment." }],
-      intent: null
+      projectId: null,
+      devId: null,
+      devName: null,
+      devEmail: null,
+      githubUsername: null,
+      errorTrace: null,
+      pendingAction: null,
+      actionApproved: null,
+      interruptionReason: null,
+      intent: null,
+      messages: [{ role: "assistant", content: "❌ **Triage aborted:** Missing telemetry values (Project, Developer Name, or Email) to prepare incident assignment." }]
     };
   }
 
@@ -694,7 +715,20 @@ async function executeActionNode(state: typeof AgentState.State) {
     };
   }
 
-  if (!state.pendingAction) return {};
+  if (!state.pendingAction) {
+    return {
+      projectId: null,
+      devId: null,
+      devName: null,
+      devEmail: null,
+      githubUsername: null,
+      errorTrace: null,
+      pendingAction: null,
+      actionApproved: null,
+      interruptionReason: null,
+      intent: null
+    };
+  }
 
   const { ticket, schedule } = state.pendingAction;
 

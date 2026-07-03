@@ -19,7 +19,8 @@ export async function POST(req: NextRequest) {
       configurable: {
         thread_id: threadId,
         modelName: modelName || "models/gemini-3.1-flash-lite"
-      }
+      },
+      recursionLimit: 100
     };
     let responseState;
 
