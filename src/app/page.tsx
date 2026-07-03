@@ -140,6 +140,9 @@ export default function Home() {
   const [usageData, setUsageData] = useState<UsageData | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
 
+  // Integration verification loading states
+  const [integrationChecking, setIntegrationChecking] = useState<Record<string, boolean>>({});
+
   // New Project Dialog State
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
   const [newProjName, setNewProjName] = useState("");
@@ -249,6 +252,24 @@ export default function Home() {
       toast.error("Failed to retrieve active projects.");
     } finally {
       setProjectsLoading(false);
+    }
+  };
+
+  // Verify an integration by calling /api/integrations/verify?service=X
+  const verifyIntegration = async (service: string) => {
+    setIntegrationChecking((prev) => ({ ...prev, [service]: true }));
+    try {
+      const res = await fetch(`/api/integrations/verify?service=${service}`);
+      const data = await res.json();
+      if (data.ok) {
+        toast.success(data.message);
+      } else {
+        toast.error(data.message);
+      }
+    } catch (err) {
+      toast.error(`Could not reach /api/integrations/verify for ${service}.`);
+    } finally {
+      setIntegrationChecking((prev) => ({ ...prev, [service]: false }));
     }
   };
 
@@ -1645,8 +1666,14 @@ export default function Home() {
                       Syncs latest repository branches and audits commit histories. Resolves commits for semantic crash triaging.
                     </p>
                     <div className="flex items-center justify-between pt-2 text-[11px] text-slate-400 border-t border-[#e5e7eb]">
-                      <span>Rate Limit Status: 4998 / 5000</span>
-                      <button onClick={() => toast.info("GitHub API keys verified.")} className="text-[#3ecf8e] font-bold hover:underline">Verify Key</button>
+                       <span>Calls GET /user on GitHub API v3</span>
+                       <button
+                         onClick={() => verifyIntegration("github")}
+                         disabled={integrationChecking["github"]}
+                         className="text-[#3ecf8e] font-bold hover:underline disabled:opacity-50 disabled:cursor-wait"
+                       >
+                         {integrationChecking["github"] ? "Verifying..." : "Verify Key"}
+                       </button>
                     </div>
                   </div>
 
@@ -1668,8 +1695,14 @@ export default function Home() {
                       Persists active team registries, sprint task databases, and monitors the incoming diagnostic system events telemetry logs.
                     </p>
                     <div className="flex items-center justify-between pt-2 text-[11px] text-slate-400 border-t border-[#e5e7eb]">
-                      <span>Realtime Channels: Enabled</span>
-                      <button onClick={() => toast.info("Supabase client connection healthy.")} className="text-[#3ecf8e] font-bold hover:underline">Test Ping</button>
+                       <span>Measures query round-trip latency</span>
+                       <button
+                         onClick={() => verifyIntegration("supabase")}
+                         disabled={integrationChecking["supabase"]}
+                         className="text-[#3ecf8e] font-bold hover:underline disabled:opacity-50 disabled:cursor-wait"
+                       >
+                         {integrationChecking["supabase"] ? "Pinging..." : "Test Ping"}
+                       </button>
                     </div>
                   </div>
 
@@ -1691,8 +1724,16 @@ export default function Home() {
                       Schedules Google Meet video calls automatically and sends calendar invites to culprit developers upon standup remediation approval.
                     </p>
                     <div className="flex items-center justify-between pt-2 text-[11px] text-slate-400 border-t border-[#e5e7eb]">
-                      <span>Calendar Scope: Read/Write</span>
-                      <button onClick={() => toast.info("Google OAuth callback tokens validated.")} className="text-[#3ecf8e] font-bold hover:underline">Re-Auth</button>
+                       <span>Calendar Scope: Read/Write</span>
+                       <button
+                         onClick={() => {
+                           toast.info("Redirecting to Google OAuth consent screen...");
+                           setTimeout(() => { window.location.href = "/api/auth/google"; }, 800);
+                         }}
+                         className="text-[#3ecf8e] font-bold hover:underline"
+                       >
+                         Re-Auth
+                       </button>
                     </div>
                   </div>
 
@@ -1714,8 +1755,14 @@ export default function Home() {
                       Sends automated reminders, warnings, and escalation alerts directly to team communication channels.
                     </p>
                     <div className="flex items-center justify-between pt-2 text-[11px] text-slate-400 border-t border-[#e5e7eb]">
-                      <span>Escalations: Configured</span>
-                      <button onClick={() => toast.info("Test Slack notification dispatched.")} className="text-[#3ecf8e] font-bold hover:underline">Send Test Alert</button>
+                       <span>Posts to SLACK_WEBHOOK_URL env var</span>
+                       <button
+                         onClick={() => verifyIntegration("slack")}
+                         disabled={integrationChecking["slack"]}
+                         className="text-[#3ecf8e] font-bold hover:underline disabled:opacity-50 disabled:cursor-wait"
+                       >
+                         {integrationChecking["slack"] ? "Sending..." : "Send Test Alert"}
+                       </button>
                     </div>
                   </div>
                 </div>
