@@ -34,7 +34,7 @@ interface Project {
   project_name: string;
   github_repo_url: string;
   created_at: string;
-  status?: "active" | "paused";
+  status?: "active" | "paused" | "completed";
   region?: string;
   size?: string;
 }
@@ -132,8 +132,18 @@ export default function Home() {
   // Navigation: "landing" | "app"
   const [viewMode, setViewMode] = useState<"landing" | "app">("landing");
 
-  // Sidebar Tab Navigation: "projects" | "chat" | "team" | "integrations" | "usage" | "billing" | "settings"
+  // Sidebar Tab Navigation
   const [activeTab, setActiveTab] = useState<"projects" | "chat" | "team" | "integrations" | "usage" | "billing" | "settings">("projects");
+
+  // Persistent navigation helpers - save to localStorage so Restart stays on the same screen
+  const navigateTo = (mode: "landing" | "app") => {
+    setViewMode(mode);
+    if (typeof window !== "undefined") localStorage.setItem("ael_view_mode", mode);
+  };
+  const switchTab = (tab: "projects" | "chat" | "team" | "integrations" | "usage" | "billing" | "settings") => {
+    setActiveTab(tab);
+    if (typeof window !== "undefined") localStorage.setItem("ael_active_tab", tab);
+  };
 
   // Dynamic Selected Gemini Model (Persisted)
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
@@ -143,7 +153,7 @@ export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [searchProjectQuery, setSearchProjectQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "paused">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "paused" | "completed">("all");
   const [sortBy, setSortBy] = useState<"name" | "created">("name");
   const [viewLayout, setViewLayout] = useState<"grid" | "list">("grid");
 
@@ -151,15 +161,17 @@ export default function Home() {
   const [team, setTeam] = useState<TeamMember[]>([]);
   const [teamLoading, setTeamLoading] = useState(false);
 
-  // Usage stats (from /api/usage — real Supabase data)
+  // Usage stats (from /api/usage - real Supabase data)
   const [usageData, setUsageData] = useState<UsageData | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
 
   // Integration verification loading states
   const [integrationChecking, setIntegrationChecking] = useState<Record<string, boolean>>({});
 
-  // Active project selector (for agent context — like the model selector)
+  // Active project selector (for agent context - like the model selector)
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const [activeProjectCommits, setActiveProjectCommits] = useState<any[]>([]);
+  const [activeProjectCommitsLoading, setActiveProjectCommitsLoading] = useState(false);
 
   // Live GitHub repos fetched from GitHub API
   const [githubRepos, setGithubRepos] = useState<GitHubRepo[]>([]);
@@ -215,6 +227,14 @@ export default function Home() {
         window.history.replaceState({}, document.title, window.location.pathname);
       }
 
+      // Restore view mode (so Restart stays on the app screen)
+      const savedViewMode = localStorage.getItem("ael_view_mode");
+      if (savedViewMode === "app") setViewMode("app");
+
+      // Restore active tab
+      const savedTab = localStorage.getItem("ael_active_tab");
+      if (savedTab) setActiveTab(savedTab as any);
+
       // Restore selected model
       const savedModel = localStorage.getItem("ael_selected_model");
       if (savedModel) setSelectedModel(savedModel);
@@ -260,14 +280,11 @@ export default function Home() {
           // Hardcode screenshot states for matching aesthetics
           let region = "us-east-1";
           let size = "NANO";
-          let status: "active" | "paused" = "active";
 
           if (p.project_name.toLowerCase().includes("pulse")) {
             region = "ap-southeast-1";
-            status = "paused";
           } else if (p.project_name.toLowerCase().includes("website")) {
             region = "ap-northeast-1";
-            status = "active";
           } else {
             // cycle regions
             const regions = ["us-east-1", "eu-central-1", "ap-southeast-2"];
@@ -278,10 +295,24 @@ export default function Home() {
             ...p,
             region,
             size,
-            status
+            status: p.status || "active"
           };
         });
         setProjects(dbProjects);
+        
+        let projectToSelect = null;
+        const savedProject = localStorage.getItem("ael_selected_project");
+        if (savedProject) {
+          projectToSelect = dbProjects.find((p: any) => p.project_id === savedProject);
+        }
+        if (!projectToSelect && dbProjects.length > 0) {
+          projectToSelect = dbProjects[0];
+        }
+        if (projectToSelect) {
+          setSelectedProjectId(projectToSelect.project_id);
+          localStorage.setItem("ael_selected_project", projectToSelect.project_id);
+          fetchProjectCommits(projectToSelect.github_repo_url);
+        }
       } else {
         toast.error(`Projects Fetch Error: ${data.error}`);
       }
@@ -346,6 +377,27 @@ export default function Home() {
     }
   };
 
+  // Fetch live git commits for a repository
+  const fetchProjectCommits = async (repoUrl: string) => {
+    if (!repoUrl) return;
+    try {
+      setActiveProjectCommitsLoading(true);
+      const res = await fetch(`/api/github/commits?repoUrl=${encodeURIComponent(repoUrl)}`);
+      const data = await res.json();
+      if (res.ok) {
+        setActiveProjectCommits(data.commits || []);
+      } else {
+        setActiveProjectCommits([]);
+        console.error("Failed to fetch project commits:", data.error);
+      }
+    } catch (err) {
+      console.error("Network error fetching project commits:", err);
+      setActiveProjectCommits([]);
+    } finally {
+      setActiveProjectCommitsLoading(false);
+    }
+  };
+
   // Fetch team members from database
   const fetchTeam = async () => {
     try {
@@ -382,16 +434,141 @@ export default function Home() {
     }
   };
 
-  // Toggle active/paused state on projects
-  const handleToggleProjectStatus = (projectId: string, currentStatus: "active" | "paused") => {
+  // Toggle active/paused state on projects (database integrated)
+  const handleToggleProjectStatus = async (projectId: string, currentStatus: "active" | "paused" | "completed") => {
     const nextStatus = currentStatus === "active" ? "paused" : "active";
-    setProjects(prev => prev.map(p => {
-      if (p.project_id === projectId) {
-        return { ...p, status: nextStatus };
+    try {
+      const res = await fetch("/api/projects", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId, status: nextStatus })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Failed to toggle status.");
+        return;
       }
-      return p;
-    }));
-    toast.success(`Project ${nextStatus === "active" ? "resumed" : "paused"} successfully.`);
+      setProjects(prev => prev.map(p => {
+        if (p.project_id === projectId) {
+          return { ...p, status: nextStatus };
+        }
+        return p;
+      }));
+      toast.success(`Project ${nextStatus === "active" ? "resumed" : "paused"} successfully.`);
+    } catch (err: any) {
+      toast.error(`Error toggling project status: ${err.message}`);
+    }
+  };
+
+  // Mark project as completed or reactivate
+  const handleMarkProjectCompleted = async (projectId: string, isCompleted: boolean) => {
+    const nextStatus = isCompleted ? "completed" : "active";
+    try {
+      const res = await fetch("/api/projects", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId, status: nextStatus })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Failed to update project status.");
+        return;
+      }
+      setProjects(prev => prev.map(p => {
+        if (p.project_id === projectId) {
+          return { ...p, status: nextStatus };
+        }
+        return p;
+      }));
+      toast.success(isCompleted ? "Project marked as completed!" : "Project reactivated.");
+    } catch (err: any) {
+      toast.error(`Error marking project: ${err.message}`);
+    }
+  };
+
+  // Deselect/Delete project from database
+  const handleDeselectProject = async (projectId: string, projectName: string) => {
+    if (!confirm(`Are you sure you want to deselect/remove project "${projectName}"?`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/projects?projectId=${projectId}`, {
+        method: "DELETE"
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Failed to delete project.");
+        return;
+      }
+      setProjects(prev => prev.filter(p => p.project_id !== projectId));
+      toast.success(`Project "${projectName}" successfully deselected.`);
+      if (selectedProjectId === projectId) {
+        setSelectedProjectId("");
+        localStorage.removeItem("ael_selected_project");
+      }
+    } catch (err: any) {
+      toast.error(`Error deselecting project: ${err.message}`);
+    }
+  };
+
+  // Select/Add Github Repository as a project in DB
+  const handleSelectGithubRepoAsProject = async (repo: GitHubRepo) => {
+    try {
+      const res = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: repo.name,
+          github_repo_url: repo.html_url,
+          status: "active"
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Failed to register project.");
+        return;
+      }
+      const newProj = {
+        ...data.project,
+        region: "us-east-1",
+        size: "NANO",
+        status: "active"
+      };
+      setProjects(prev => [...prev, newProj]);
+      setSelectedProjectId(newProj.project_id);
+      localStorage.setItem("ael_selected_project", newProj.project_id);
+      localStorage.setItem("ael_selected_repo_url", newProj.github_repo_url);
+      localStorage.setItem("ael_selected_repo_name", newProj.project_name);
+      toast.success(`Project "${repo.name}" registered and selected.`);
+    } catch (err: any) {
+      toast.error(`Error adding project: ${err.message}`);
+    }
+  };
+
+  // Deselect/Remove Github Repository project using repo URL
+  const handleDeselectGithubRepoProject = async (githubRepoUrl: string, projectName: string) => {
+    if (!confirm(`Are you sure you want to deselect/remove project "${projectName}"?`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/projects?githubRepoUrl=${encodeURIComponent(githubRepoUrl)}`, {
+        method: "DELETE"
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Failed to deselect project.");
+        return;
+      }
+      setProjects(prev => prev.filter(p => p.github_repo_url !== githubRepoUrl));
+      toast.success(`Project "${projectName}" deselected.`);
+      const matched = projects.find(p => p.github_repo_url === githubRepoUrl);
+      if (matched && selectedProjectId === matched.project_id) {
+        setSelectedProjectId("");
+        localStorage.removeItem("ael_selected_project");
+      }
+    } catch (err: any) {
+      toast.error(`Error deselecting project: ${err.message}`);
+    }
   };
 
   // Create new project
@@ -427,6 +604,14 @@ export default function Home() {
     } finally {
       setIsCreatingProject(false);
     }
+  };
+
+  // Switch selected active project
+  const handleSelectProject = (p: any) => {
+    setSelectedProjectId(p.project_id);
+    localStorage.setItem("ael_selected_project", p.project_id);
+    fetchProjectCommits(p.github_repo_url);
+    toast.success(`Switched active project context to: ${p.project_name}`);
   };
 
   // Trigger Mock Server Crash
@@ -705,87 +890,180 @@ export default function Home() {
   // =========================================================================
   if (viewMode === "landing") {
     return (
-      <div className="min-h-screen bg-white text-slate-800 font-sans flex flex-col justify-between selection:bg-[#3ecf8e]/20 select-none">
+      <div className="min-h-screen bg-[#fafbfa] text-slate-800 font-sans flex flex-col justify-between selection:bg-[#3ecf8e]/20 select-none">
         
         {/* Navigation */}
-        <header className="h-16 border-b border-slate-100 px-6 md:px-12 flex items-center justify-between bg-white/80 backdrop-blur sticky top-0 z-30">
+        <header className="h-16 border-b border-slate-200/60 px-6 md:px-12 flex items-center justify-between bg-white/80 backdrop-blur sticky top-0 z-30 shadow-sm">
           <div className="flex items-center gap-2.5">
-            <svg className="w-6 h-6 text-[#3ecf8e] fill-current" viewBox="0 0 24 24">
-              <path d="M21.36 9.8a1.05 1.05 0 00-1-1H14.1l2.5-6.83a1.05 1.05 0 00-1.85-.92L5.87 11.23a1.05 1.05 0 00.78 1.77h6.26l-2.5 6.83a1.05 1.05 0 001.85.92L21.23 11a1.05 1.05 0 00.13-1.2z" />
-            </svg>
-            <span className="font-bold text-slate-900 tracking-tight text-lg">Autonomous Engineering Lead (AEL)</span>
+            <div className="p-1.5 bg-[#3ecf8e]/10 rounded-lg">
+              <svg className="w-6 h-6 text-[#3ecf8e] fill-current" viewBox="0 0 24 24">
+                <path d="M21.36 9.8a1.05 1.05 0 00-1-1H14.1l2.5-6.83a1.05 1.05 0 00-1.85-.92L5.87 11.23a1.05 1.05 0 00.78 1.77h6.26l-2.5 6.83a1.05 1.05 0 001.85.92L21.23 11a1.05 1.05 0 00.13-1.2z" />
+              </svg>
+            </div>
+            <div>
+              <span className="font-bold text-slate-900 tracking-tight text-base">AEL Autonomous Engineering Lead</span>
+              <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono ml-2">v1.5.0</span>
+            </div>
           </div>
-          <Button 
-            onClick={() => setViewMode("app")}
-            className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white font-semibold text-xs px-4 py-2 rounded-md shadow-sm transition-all"
-          >
-            Launch Console
-          </Button>
+          <div className="flex items-center gap-4">
+
+            <a href="#architecture" className="text-xs font-semibold text-slate-600 hover:text-slate-900 transition-colors">Architecture</a>
+            <Button 
+              onClick={() => navigateTo("app")}
+              className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white font-bold text-xs px-4 py-2 rounded-md shadow-sm transition-all"
+            >
+              Launch Console
+            </Button>
+          </div>
         </header>
 
-        {/* Hero Section */}
-        <main className="flex-1 flex flex-col justify-center items-center px-6 md:px-12 py-16 text-center max-w-5xl mx-auto space-y-12">
+        {/* Long Form Landing & Documentation */}
+        <main className="flex-1 flex flex-col justify-start items-center px-6 md:px-12 py-16 text-center max-w-5xl mx-auto space-y-20">
           
-          <div className="space-y-4">
-            <h1 className="text-4xl md:text-6xl font-extrabold text-slate-900 tracking-tight leading-tight">
+          {/* Hero Section */}
+          <div className="space-y-6 max-w-3xl">
+            <h1 className="text-4xl md:text-6xl font-extrabold text-slate-900 tracking-tight leading-[1.15]">
               Say hello to the first <br/>
               <span className="bg-gradient-to-r from-emerald-600 to-[#3ecf8e] bg-clip-text text-transparent">
-                Autonomous Site Reliability Agent
+                Autonomous Engineering Lead Agent
               </span>
             </h1>
-            <p className="text-base md:text-lg text-slate-500 max-w-2xl mx-auto leading-relaxed">
-              AEL monitors your Supabase backend telemetry logs, semantic audits git commits to pinpoint code regressions, coordinates daily standup remediations, and manages live stakeholder coordination loops.
+            <p className="text-sm md:text-base text-slate-500 max-w-2xl mx-auto leading-relaxed">
+              AEL monitors your database crash telemetry logs, audits git commits to pinpoint code regressions, coordinates daily standup remediations, and manages live stakeholder coordination loops.
             </p>
+            <div className="pt-4 flex justify-center gap-4">
+              <Button 
+                onClick={() => navigateTo("app")}
+                className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white font-bold text-sm px-8 py-3 rounded-lg shadow-lg hover:shadow-emerald-100 transition-all flex items-center gap-2"
+              >
+                Launch Workspace Dashboard
+                <span className="text-lg">{"\u2192"}</span>
+              </Button>
+            </div>
           </div>
 
           {/* Quick Stats Banner */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-6 w-full max-w-4xl bg-slate-50 p-6 rounded-2xl border border-slate-100">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6 w-full max-w-4xl bg-white p-6 rounded-2xl border border-slate-200/60 shadow-sm">
             <div>
-              <p className="text-2xl font-bold text-slate-900">100%</p>
+              <p className="text-3xl font-extrabold text-[#3ecf8e]">100%</p>
               <p className="text-xs text-slate-500 mt-1">Autonomous Triaging</p>
             </div>
             <div>
-              <p className="text-2xl font-bold text-slate-900">&lt; 30s</p>
+              <p className="text-3xl font-extrabold text-slate-900">&lt; 30s</p>
               <p className="text-xs text-slate-500 mt-1">Average Response Time</p>
             </div>
             <div>
-              <p className="text-2xl font-bold text-slate-900">4 / 4</p>
-              <p className="text-xs text-slate-500 mt-1">Subsystems Connected</p>
+              <p className="text-3xl font-extrabold text-slate-900">Live</p>
+              <p className="text-xs text-slate-500 mt-1">Octokit Git Integration</p>
             </div>
             <div>
-              <p className="text-2xl font-bold text-slate-900">Active</p>
-              <p className="text-xs text-slate-500 mt-1">Calendar & Git API Sync</p>
+              <p className="text-3xl font-extrabold text-[#3ecf8e]">Active</p>
+              <p className="text-xs text-slate-500 mt-1">Calendar & Meet Sync</p>
+            </div>
+          </div>
+
+          {/* Architecture Visual Diagram */}
+          <div id="architecture" className="w-full space-y-6 text-left scroll-mt-20">
+            <div className="border-l-4 border-[#3ecf8e] pl-4">
+              <h2 className="text-xl font-bold text-slate-900">System Architecture & Flow</h2>
+              <p className="text-xs text-slate-500 mt-1">How the AEL LangGraph state machine handles crash diagnostics, developer matching, and meeting booking.</p>
+            </div>
+            <div className="bg-white border border-slate-200/60 rounded-2xl p-6 shadow-sm flex flex-col md:flex-row gap-6 items-stretch">
+              <div className="flex-1 space-y-4 flex flex-col justify-center">
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold flex items-center justify-center shrink-0">1</div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900">Telemetry Ingestion</h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Real-time database crash logs or server issues trigger events in the `system_events` telemetry log.</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold flex items-center justify-center shrink-0">2</div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900">Semantic Audit & Git Diff</h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">AEL fetches the recent commits from GitHub using the Repository URL and compares the crash trace against the commit code diffs using Gemini.</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold flex items-center justify-center shrink-0">3</div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900">Developer Workload Scan</h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">AEL audits the active task lists for the culprit developer. If they have over 3 critical or overdue tasks, a workload warning is raised.</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold flex items-center justify-center shrink-0">4</div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900">Human-in-the-Loop Override</h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">The agent pauses execution at critical junctions (e.g. unmapped developer details or workload overrides) to prompt the user for input or confirmation.</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold flex items-center justify-center shrink-0">5</div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900">Remediation Scheduling</h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Upon approval, AEL automatically creates an incident ticket, schedules a 15-min Google Calendar sync, and posts a Google Meet link in the chat console.</p>
+                  </div>
+                </div>
+              </div>
+              <div className="flex-1 bg-slate-50 rounded-xl p-4 flex items-center justify-center border border-slate-100">
+                <svg className="w-full h-auto max-w-[400px]" viewBox="0 0 400 320" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <rect x="140" y="20" width="120" height="40" rx="6" fill="#1e293b" />
+                  <text x="200" y="44" fill="white" fontSize="10" fontWeight="bold" textAnchor="middle">DB Crash Ingested</text>
+                  
+                  <path d="M200 60V90" stroke="#94a3b8" strokeWidth="2" strokeDasharray="3 3" />
+                  
+                  <rect x="140" y="90" width="120" height="40" rx="6" fill="#0f766e" />
+                  <text x="200" y="114" fill="white" fontSize="10" fontWeight="bold" textAnchor="middle">Fetch Git Commits</text>
+                  
+                  <path d="M200 130V160" stroke="#94a3b8" strokeWidth="2" strokeDasharray="3 3" />
+                  
+                  <rect x="140" y="160" width="120" height="40" rx="6" fill="#0369a1" />
+                  <text x="200" y="184" fill="white" fontSize="10" fontWeight="bold" textAnchor="middle">Semantic Audit</text>
+                  
+                  <path d="M200 200V230" stroke="#94a3b8" strokeWidth="2" strokeDasharray="3 3" />
+                  
+                  <rect x="120" y="230" width="160" height="45" rx="6" fill="#b45309" />
+                  <text x="200" y="248" fill="white" fontSize="9" fontWeight="bold" textAnchor="middle">Human Approval / Interrupt</text>
+                  <text x="200" y="261" fill="#fed7aa" fontSize="7" textAnchor="middle">Unmapped Email / Overload</text>
+                  
+                  <path d="M200 275V295" stroke="#94a3b8" strokeWidth="2" strokeDasharray="3 3" />
+                  
+                  <rect x="130" y="295" width="140" height="35" rx="6" fill="#047857" />
+                  <text x="200" y="316" fill="white" fontSize="9" fontWeight="bold" textAnchor="middle">Ticket & Google Meet</text>
+                </svg>
+              </div>
             </div>
           </div>
 
           {/* Feature Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full text-left mt-8">
-            <div className="p-6 border border-slate-100 bg-white rounded-xl shadow-sm hover:shadow-md transition-all space-y-3">
-              <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-lg flex items-center justify-center font-bold">📊</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full text-left">
+            <div className="p-6 border border-slate-200/60 bg-white rounded-xl shadow-sm hover:shadow-md transition-all space-y-3">
+              <div className="w-10 h-10 bg-emerald-50 text-emerald-600 rounded-lg flex items-center justify-center font-bold text-base">📊</div>
               <h3 className="font-bold text-slate-900 text-sm">Sprint Daily Standup Remediation</h3>
               <p className="text-xs text-slate-500 leading-relaxed">
                 Scan sprint backlogs for overdue critical items. AEL contacts authors, schedules remediation checkins, and alerts organization leads instantly.
               </p>
             </div>
 
-            <div className="p-6 border border-slate-100 bg-white rounded-xl shadow-sm hover:shadow-md transition-all space-y-3">
-              <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center font-bold">🔍</div>
+            <div className="p-6 border border-slate-200/60 bg-white rounded-xl shadow-sm hover:shadow-md transition-all space-y-3">
+              <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center font-bold text-base">{"\uD83D\uDD0D"}</div>
               <h3 className="font-bold text-slate-900 text-sm">Semantic Stack Trace Audit</h3>
               <p className="text-xs text-slate-500 leading-relaxed">
                 When a system crash gets logged to Supabase, AEL compares stack traces against latest Git commits to find the exact line causing issues.
               </p>
             </div>
 
-            <div className="p-6 border border-slate-100 bg-white rounded-xl shadow-sm hover:shadow-md transition-all space-y-3">
-              <div className="w-10 h-10 bg-amber-50 text-amber-600 rounded-lg flex items-center justify-center font-bold">⚡</div>
+            <div className="p-6 border border-slate-200/60 bg-white rounded-xl shadow-sm hover:shadow-md transition-all space-y-3">
+              <div className="w-10 h-10 bg-amber-50 text-amber-600 rounded-lg flex items-center justify-center font-bold text-base">{"\u26A1"}</div>
               <h3 className="font-bold text-slate-900 text-sm">Human-in-the-Loop Guardrails</h3>
               <p className="text-xs text-slate-500 leading-relaxed">
                 Execution pauses safely at critical thresholds. Intercepts trigger override approvals, registry additions for unmapped developers, and workload assignments.
               </p>
             </div>
 
-            <div className="p-6 border border-slate-100 bg-white rounded-xl shadow-sm hover:shadow-md transition-all space-y-3">
-              <div className="w-10 h-10 bg-red-50 text-red-600 rounded-lg flex items-center justify-center font-bold">📅</div>
+            <div className="p-6 border border-slate-200/60 bg-white rounded-xl shadow-sm hover:shadow-md transition-all space-y-3">
+              <div className="w-10 h-10 bg-red-50 text-red-600 rounded-lg flex items-center justify-center font-bold text-base">📅</div>
               <h3 className="font-bold text-slate-900 text-sm">Google Calendar / Meet Integration</h3>
               <p className="text-xs text-slate-500 leading-relaxed">
                 Automatically books Google Meet invites, syncs calendars between teams, and populates meeting details with automated remediation tickets.
@@ -793,22 +1071,56 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="pt-6">
-            <Button 
-              onClick={() => setViewMode("app")}
-              className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white font-bold text-sm px-8 py-3 rounded-lg shadow-lg hover:shadow-emerald-100 transition-all flex items-center gap-2"
-            >
-              Launch Workspace Dashboard
-              <span className="text-lg">→</span>
-            </Button>
+          {/* Golden Test Walks / Verification Scenarios */}
+          <div className="w-full space-y-6 text-left bg-white border border-slate-200/60 p-6 rounded-2xl shadow-sm">
+            <h2 className="text-base font-bold text-slate-900">Golden Paths: How to Verify & Test AEL</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-3">
+                <div className="flex gap-2.5 items-center">
+                  <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded">Path A</span>
+                  <h4 className="text-xs font-bold text-slate-900">Sprint Daily Standup Remediation</h4>
+                </div>
+                <ol className="list-decimal list-inside text-xs text-slate-500 space-y-1.5 leading-relaxed">
+                  <li>Navigate to the **AEL Co-Pilot Chat** console tab.</li>
+                  <li>Type or select: <code className="bg-slate-100 px-1 py-0.5 rounded text-[#c2410c] text-[10px] font-mono">Give me a status update on the team</code>.</li>
+                  <li>Verify the agent summarizes completed vs pending sprint tasks from the database and highlights overdue items automatically.</li>
+                </ol>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex gap-2.5 items-center">
+                  <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded">Path B</span>
+                  <h4 className="text-xs font-bold text-slate-900">Incident Remediation & Workload Override</h4>
+                </div>
+                <ol className="list-decimal list-inside text-xs text-slate-500 space-y-1.5 leading-relaxed">
+                  <li>Click **Mock Server Crash** in the header to register a fresh stack trace in Supabase.</li>
+                  <li>Go to **AEL Co-Pilot Chat** and type: <code className="bg-slate-100 px-1 py-0.5 rounded text-[#c2410c] text-[10px] font-mono">Investigate the latest crash</code>.</li>
+                  <li>Verify AEL fetches the log, reviews latest commits, flags a developer workload overload, and requests approval before booking.</li>
+                </ol>
+              </div>
+            </div>
+          </div>
+
+
+          {/* Action Call to Launch App */}
+          <div className="pt-8 border-t border-slate-200 w-full text-center space-y-4">
+            <h3 className="text-lg font-bold text-slate-900">Ready to test AEL Agent Console?</h3>
+            <div className="flex justify-center">
+              <Button 
+                onClick={() => navigateTo("app")}
+                className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white font-bold text-sm px-10 py-3 rounded-lg shadow-lg hover:shadow-emerald-100 transition-all"
+              >
+                Launch Console Dashboard
+              </Button>
+            </div>
           </div>
 
         </main>
 
         {/* Footer */}
-        <footer className="h-16 border-t border-slate-100 px-6 md:px-12 flex items-center justify-between text-xs text-slate-400 bg-slate-55 bg-[#fcfcfc]">
+        <footer className="h-16 border-t border-slate-200 bg-white px-6 md:px-12 flex items-center justify-between text-xs text-slate-400">
           <span>Autonomous Engineering Lead Agent Project</span>
-          <span>© 2026. All Rights Reserved.</span>
+          <span>{"\u00A9"} 2026. All Rights Reserved.</span>
         </footer>
 
       </div>
@@ -828,23 +1140,19 @@ export default function Home() {
         <aside className="w-60 bg-white border-r border-[#e5e7eb] flex flex-col justify-between shrink-0 z-20">
           <div>
             {/* Top Logo Panel */}
-            <div className="h-14 border-b border-[#e5e7eb] flex items-center justify-between px-4">
+            <div className="h-14 border-b border-[#e5e7eb] flex items-center px-4">
               <div className="flex items-center gap-2.5">
                 <svg className="w-5 h-5 text-[#3ecf8e] fill-current" viewBox="0 0 24 24">
                   <path d="M21.36 9.8a1.05 1.05 0 00-1-1H14.1l2.5-6.83a1.05 1.05 0 00-1.85-.92L5.87 11.23a1.05 1.05 0 00.78 1.77h6.26l-2.5 6.83a1.05 1.05 0 001.85.92L21.23 11a1.05 1.05 0 00.13-1.2z" />
                 </svg>
-                <div>
-                  <h1 className="text-xs font-bold tracking-tight text-[#111827]">z360-ael-agent</h1>
-                  <p className="text-[9px] text-[#6b7280]">malikabdullah1786's Org</p>
-                </div>
+                <h1 className="text-xs font-bold tracking-tight text-[#111827]">AEL</h1>
               </div>
-              <span className="text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-bold">FREE</span>
             </div>
 
             {/* Navigation Menu Items */}
             <nav className="p-3 space-y-1">
               <button
-                onClick={() => setViewMode("landing")}
+                onClick={() => navigateTo("landing")}
                 className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium text-[#6b7280] hover:bg-[#f9fafb] hover:text-[#111827] transition-all"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -859,7 +1167,7 @@ export default function Home() {
               
               {/* Projects Tab */}
               <button
-                onClick={() => setActiveTab("projects")}
+                onClick={() => switchTab("projects")}
                 className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium transition-all ${
                   activeTab === "projects"
                     ? "bg-[#f3f4f6] text-[#111827] font-bold"
@@ -874,7 +1182,7 @@ export default function Home() {
 
               {/* AEL Co-Pilot Tab */}
               <button
-                onClick={() => setActiveTab("chat")}
+                onClick={() => switchTab("chat")}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs font-medium transition-all ${
                   activeTab === "chat"
                     ? "bg-[#f3f4f6] text-[#111827] font-bold"
@@ -894,7 +1202,7 @@ export default function Home() {
 
               {/* Team Tab */}
               <button
-                onClick={() => setActiveTab("team")}
+                onClick={() => switchTab("team")}
                 className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium transition-all ${
                   activeTab === "team"
                     ? "bg-[#f3f4f6] text-[#111827] font-bold"
@@ -909,7 +1217,7 @@ export default function Home() {
 
               {/* Integrations Tab */}
               <button
-                onClick={() => setActiveTab("integrations")}
+                onClick={() => switchTab("integrations")}
                 className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium transition-all ${
                   activeTab === "integrations"
                     ? "bg-[#f3f4f6] text-[#111827] font-bold"
@@ -917,14 +1225,14 @@ export default function Home() {
                 }`}
               >
                 <svg className="w-4 h-4 text-[#8c8c8c]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 011 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
                 </svg>
                 Integrations
               </button>
 
               {/* Usage Tab */}
               <button
-                onClick={() => setActiveTab("usage")}
+                onClick={() => switchTab("usage")}
                 className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium transition-all ${
                   activeTab === "usage"
                     ? "bg-[#f3f4f6] text-[#111827] font-bold"
@@ -941,7 +1249,7 @@ export default function Home() {
 
               {/* Settings Tab */}
               <button
-                onClick={() => setActiveTab("settings")}
+                onClick={() => switchTab("settings")}
                 className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-medium transition-all ${
                   activeTab === "settings"
                     ? "bg-[#f3f4f6] text-[#111827] font-bold"
@@ -978,25 +1286,12 @@ export default function Home() {
         {/* ========================================================================= */}
         <div className="flex-1 flex flex-col min-w-0 bg-[#fcfcfc] relative">
 
-          {/* Incident Alert Bar (Matches screenshot style) */}
-          <div className="bg-[#fff7ed] border-b border-[#ffedd5] px-6 py-2 flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-2 text-xs text-[#c2410c] font-medium">
-              <span className="flex h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
-              <span>We are investigating a technical issue with SRE Calendar Webhooks. Follow the status page for updates.</span>
-            </div>
-            <button 
-              onClick={() => toast.info("Status page is operational.")}
-              className="text-[10px] text-[#c2410c] hover:underline font-bold"
-            >
-              Status Page
-            </button>
-          </div>
-          
+
           {/* Top Header Bar */}
           <header className="h-14 border-b border-[#e5e7eb] flex items-center justify-between px-6 bg-white shrink-0">
             {/* Breadcrumb path */}
             <div className="flex items-center gap-2 text-xs font-medium">
-              <span className="text-[#6b7280]">z360-ael-agent</span>
+              <span className="text-[#6b7280]">AEL</span>
               <span className="text-[#d1d5db]">/</span>
               <span className="text-[#111827] font-semibold capitalize">
                 {activeTab === "projects" ? "Projects Dashboard" : activeTab === "chat" ? "AEL Co-Pilot Chat" : activeTab}
@@ -1037,11 +1332,11 @@ export default function Home() {
           {/* ========================================================================= */}
           {/* 3. CORE WORKSPACE: PROJECTS, CHAT, TEAM, SETTINGS, ETC                    */}
           {/* ========================================================================= */}
-          <main className="flex-1 overflow-hidden p-6 relative bg-[#f9fafb]">
+          <main className="flex-1 flex flex-col min-h-0 p-6 relative bg-[#f9fafb]">
             
             {/* PROJECTS TAB */}
             {activeTab === "projects" && (
-              <div className="h-full flex flex-col space-y-6 overflow-y-auto pr-1">
+              <div className="flex-1 min-h-0 flex flex-col space-y-6 overflow-y-auto pr-1">
                 
                 {/* Header Filter Panel */}
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 border border-[#e5e7eb] rounded-lg shadow-sm shrink-0">
@@ -1068,6 +1363,7 @@ export default function Home() {
                       <option value="all">All Statuses</option>
                       <option value="active">Active</option>
                       <option value="paused">Paused</option>
+                      <option value="completed">Completed</option>
                     </select>
 
                     {/* Sort selector */}
@@ -1103,7 +1399,12 @@ export default function Home() {
                     </div>
 
                     <Button
-                      onClick={() => setIsNewProjectOpen(true)}
+                      onClick={() => {
+                        setIsNewProjectOpen(true);
+                        if (githubRepos.length === 0) {
+                          fetchGitHubRepos();
+                        }
+                      }}
                       className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white text-xs h-8 px-3 rounded shadow-sm font-bold"
                     >
                       + New Project
@@ -1127,29 +1428,45 @@ export default function Home() {
                       </div>
                     ) : viewLayout === "grid" ? (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {filteredProjects.map((p) => (
-                          <div 
-                            key={p.project_id}
-                            className={`bg-white border rounded-lg p-4 shadow-sm hover:shadow-md transition-all flex flex-col justify-between h-40 ${
-                              p.status === "paused" ? "border-amber-250 bg-amber-50/10 border-amber-200" : "border-[#e5e7eb]"
-                            }`}
-                          >
+                        {filteredProjects.map((p) => {
+                          const isActive = selectedProjectId === p.project_id;
+                          return (
+                            <div 
+                              key={p.project_id}
+                              onClick={() => handleSelectProject(p)}
+                              className={`cursor-pointer bg-white border rounded-lg p-4 shadow-sm hover:shadow-md transition-all flex flex-col justify-between h-40 ${
+                                isActive 
+                                  ? "border-[#3ecf8e] ring-2 ring-[#3ecf8e]/20 bg-emerald-50/5" 
+                                  : p.status === "completed"
+                                    ? "border-blue-200 bg-blue-50/5"
+                                    : p.status === "paused" 
+                                      ? "border-amber-250 bg-amber-50/5" 
+                                      : "border-[#e5e7eb]"
+                              }`}
+                            >
                             <div className="flex items-start justify-between">
                               <div className="flex items-center gap-3">
-                                <div className={`p-2.5 rounded-lg shrink-0 ${p.status === "paused" ? "bg-amber-50 text-amber-600" : "bg-emerald-50 text-emerald-600"}`}>
+                                <div className={`p-2.5 rounded-lg shrink-0 ${
+                                  p.status === "completed" 
+                                    ? "bg-blue-50 text-blue-600" 
+                                    : p.status === "paused" 
+                                      ? "bg-amber-50 text-amber-600" 
+                                      : "bg-emerald-50 text-emerald-600"
+                                }`}>
                                   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
                                   </svg>
                                 </div>
                                 <div className="min-w-0">
                                   <h3 className="font-bold text-slate-900 text-sm truncate">{p.project_name}</h3>
-                                  <p className="text-[10px] text-[#6b7280] font-mono mt-0.5 truncate">{p.region} | {p.size}</p>
                                 </div>
                               </div>
                               <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold border capitalize ${
-                                p.status === "active" 
-                                  ? "bg-emerald-50 text-emerald-700 border-emerald-250 border-emerald-250" 
-                                  : "bg-amber-50 text-amber-800 border-amber-250"
+                                p.status === "completed"
+                                  ? "bg-blue-50 text-blue-700 border-blue-200"
+                                  : p.status === "active" 
+                                    ? "bg-emerald-50 text-emerald-700 border-emerald-200" 
+                                    : "bg-amber-50 text-amber-800 border-amber-200"
                               }`}>
                                 {p.status}
                               </span>
@@ -1166,129 +1483,185 @@ export default function Home() {
                               <span className="text-[9px] text-[#8c8c8c] font-mono">
                                 Created: {new Date(p.created_at || "").toLocaleDateString()}
                               </span>
-                              <button
-                                onClick={() => handleToggleProjectStatus(p.project_id, p.status || "active")}
-                                className={`text-[10px] font-bold px-2 py-1 rounded transition-colors ${
-                                  p.status === "active" 
-                                    ? "bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-250" 
-                                    : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-250"
-                                }`}
-                              >
-                                {p.status === "active" ? "Pause Project" : "Resume"}
-                              </button>
+                              <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                {p.status !== "completed" && (
+                                  <button
+                                    onClick={() => handleToggleProjectStatus(p.project_id, p.status || "active")}
+                                    className={`text-[9px] font-bold px-1.5 py-0.5 rounded border transition-colors ${
+                                      p.status === "active" 
+                                        ? "bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-200" 
+                                        : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200"
+                                    }`}
+                                  >
+                                    {p.status === "active" ? "Pause" : "Resume"}
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => handleMarkProjectCompleted(p.project_id, p.status !== "completed")}
+                                  className={`text-[9px] font-bold px-1.5 py-0.5 rounded border transition-colors ${
+                                    p.status === "completed"
+                                      ? "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200"
+                                      : "bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+                                  }`}
+                                >
+                                  {p.status === "completed" ? "Reactivate" : "Complete"}
+                                </button>
+                                <button
+                                  onClick={() => handleDeselectProject(p.project_id, p.project_name)}
+                                  className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200 transition-colors"
+                                >
+                                  Deselect
+                                </button>
+                              </div>
                             </div>
                           </div>
-                        ))}
-                      </div>
+                        );
+                      })}
+                    </div>
                     ) : (
                       <div className="bg-white border border-[#e5e7eb] rounded-lg shadow-sm overflow-hidden">
                         <Table>
                           <TableHeader>
                             <TableRow className="border-[#e5e7eb]">
                               <TableHead className="text-[11px] font-bold text-[#6b7280]">Project Name</TableHead>
-                              <TableHead className="text-[11px] font-bold text-[#6b7280]">Region</TableHead>
-                              <TableHead className="text-[11px] font-bold text-[#6b7280]">Instance</TableHead>
                               <TableHead className="text-[11px] font-bold text-[#6b7280]">Repository URL</TableHead>
                               <TableHead className="text-[11px] font-bold text-[#6b7280]">Status</TableHead>
                               <TableHead className="text-[11px] font-bold text-[#6b7280] text-right">Actions</TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
-                            {filteredProjects.map((p) => (
-                              <TableRow key={p.project_id} className="border-[#e5e7eb] hover:bg-slate-50">
+                            {filteredProjects.map((p) => {
+                              const isActive = selectedProjectId === p.project_id;
+                              return (
+                                <TableRow 
+                                  key={p.project_id} 
+                                  onClick={() => handleSelectProject(p)}
+                                  className={`cursor-pointer border-[#e5e7eb] hover:bg-slate-50 transition-colors ${
+                                    isActive ? "bg-emerald-50/10 border-l-2 border-l-[#3ecf8e]" : ""
+                                  }`}
+                                >
                                 <TableCell className="font-bold text-xs text-slate-900">{p.project_name}</TableCell>
-                                <TableCell className="font-mono text-[10px] text-slate-500">{p.region}</TableCell>
-                                <TableCell className="font-mono text-[10px] text-slate-500">{p.size}</TableCell>
                                 <TableCell className="font-mono text-xs text-slate-600">{p.github_repo_url}</TableCell>
                                 <TableCell>
                                   <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold border capitalize ${
-                                    p.status === "active" 
-                                      ? "bg-emerald-50 text-emerald-700 border-emerald-200" 
-                                      : "bg-amber-50 text-amber-800 border-amber-200"
+                                    p.status === "completed"
+                                      ? "bg-blue-50 text-blue-700 border-blue-200"
+                                      : p.status === "active" 
+                                        ? "bg-emerald-50 text-emerald-700 border-emerald-200" 
+                                        : "bg-amber-50 text-amber-800 border-amber-200"
                                   }`}>
                                     {p.status}
                                   </span>
                                 </TableCell>
-                                <TableCell className="text-right">
-                                  <button
-                                    onClick={() => handleToggleProjectStatus(p.project_id, p.status || "active")}
-                                    className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
-                                      p.status === "active" 
-                                        ? "bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-250" 
-                                        : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-250"
-                                    }`}
-                                  >
-                                    {p.status === "active" ? "Pause" : "Resume"}
-                                  </button>
+                                <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    {p.status !== "completed" && (
+                                      <button
+                                        onClick={() => handleToggleProjectStatus(p.project_id, p.status || "active")}
+                                        className={`text-[9px] font-bold px-1.5 py-0.5 rounded border transition-colors ${
+                                          p.status === "active" 
+                                            ? "bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-200" 
+                                            : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200"
+                                        }`}
+                                      >
+                                        {p.status === "active" ? "Pause" : "Resume"}
+                                      </button>
+                                    )}
+                                    <button
+                                      onClick={() => handleMarkProjectCompleted(p.project_id, p.status !== "completed")}
+                                      className={`text-[9px] font-bold px-1.5 py-0.5 rounded border transition-colors ${
+                                        p.status === "completed"
+                                          ? "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200"
+                                          : "bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+                                      }`}
+                                    >
+                                      {p.status === "completed" ? "Reactivate" : "Complete"}
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeselectProject(p.project_id, p.project_name)}
+                                      className="text-[9px] font-bold px-1.5 py-0.5 rounded border bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200 transition-colors"
+                                    >
+                                      Deselect
+                                    </button>
+                                  </div>
                                 </TableCell>
-                              </TableRow>
-                            ))}
+                                </TableRow>
+                              );
+                            })}
                           </TableBody>
                         </Table>
                       </div>
                     )}
                   </div>
 
-                  {/* Right Column: Free Plan Usage Dashboard Panel */}
-                  <div className="bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm space-y-5">
-                    <div>
-                      <h3 className="font-bold text-slate-900 text-xs">Free Plan Usage</h3>
-                      <p className="text-[10px] text-[#6b7280] mt-0.5">Current billing cycle</p>
+                  {/* Right Column: Live Git Commit History Dashboard Panel */}
+                  <div className="bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="font-bold text-slate-900 text-xs">Live Repository Activity</h3>
+                        <p className="text-[10px] text-[#6b7280] mt-0.5">Real-time commit audit feed</p>
+                      </div>
+                      <span className="flex h-2 w-2 relative">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#3ecf8e] opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-[#3ecf8e]"></span>
+                      </span>
                     </div>
 
-                    <div className="space-y-4">
-                      {/* Egress */}
-                      <div className="space-y-1">
-                        <div className="flex justify-between items-center text-[10px] font-semibold">
-                          <span className="text-slate-700">EGRESS</span>
-                          <span className="text-slate-500">47 MB / 5 GB</span>
+                    <div className="border-t border-[#e5e7eb] pt-3">
+                      {activeProjectCommitsLoading ? (
+                        <div className="py-12 flex flex-col items-center justify-center space-y-2">
+                          <div className="h-5 w-5 border-2 border-[#3ecf8e] border-t-transparent rounded-full animate-spin" />
+                          <span className="text-[10px] text-slate-400">Fetching live commits...</span>
                         </div>
-                        <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                          <div className="bg-[#3ecf8e] h-full rounded-full" style={{ width: "1%" }} />
+                      ) : activeProjectCommits.length === 0 ? (
+                        <div className="py-8 text-center text-slate-400 text-[11px] leading-relaxed">
+                          No commits loaded. Select a project or verify your GITHUB_PAT integration.
                         </div>
-                      </div>
+                      ) : (
+                        <div className="space-y-3.5 max-h-[380px] overflow-y-auto pr-1">
+                          {activeProjectCommits.slice(0, 6).map((commit: any) => (
+                            <div key={commit.sha} className="relative pl-4 pb-3.5 border-l border-slate-100 last:pb-0 last:border-none">
+                              {/* Timeline indicator node */}
+                              <div className="absolute -left-[4.5px] top-1.5 h-2 w-2 rounded-full border border-white bg-[#3ecf8e]"/>
+                              
+                              <div className="space-y-1">
+                                <p className="text-[11px] font-semibold text-slate-900 leading-snug break-words">
+                                  {commit.message}
+                                </p>
+                                
+                                <div className="flex items-center gap-1.5 text-[9px] text-[#8c8c8c] font-mono">
+                                  <span className="font-semibold text-slate-600">@{commit.githubUsername}</span>
+                                  <span className="h-1 w-1 rounded-full bg-slate-300 shrink-0" />
+                                  <span className="bg-slate-50 text-slate-500 border border-slate-100 px-1 py-0.2 rounded text-[8px] font-bold">
+                                    {commit.sha.substring(0, 7)}
+                                  </span>
+                                </div>
 
-                      {/* Database Size */}
-                      <div className="space-y-1">
-                        <div className="flex justify-between items-center text-[10px] font-semibold">
-                          <span className="text-slate-700">DATABASE SIZE</span>
-                          <span className="text-slate-500">30 MB / 500 MB</span>
+                                {commit.filesChanged && commit.filesChanged.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 pt-1">
+                                    <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider">Modified:</span>
+                                    {commit.filesChanged.slice(0, 3).map((f: string, fIdx: number) => {
+                                      const basename = f.split('/').pop() || f;
+                                      return (
+                                        <span 
+                                          key={fIdx} 
+                                          title={f} 
+                                          className="text-[8px] bg-slate-50 text-slate-600 border border-slate-100 px-1 rounded truncate max-w-[80px]"
+                                        >
+                                          {basename}
+                                        </span>
+                                      );
+                                    })}
+                                    {commit.filesChanged.length > 3 && (
+                                      <span className="text-[8px] text-slate-400 font-bold">+{commit.filesChanged.length - 3} more</span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                        <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                          <div className="bg-[#3ecf8e] h-full rounded-full" style={{ width: "6%" }} />
-                        </div>
-                      </div>
-
-                      {/* Monthly Active Users */}
-                      <div className="space-y-1">
-                        <div className="flex justify-between items-center text-[10px] font-semibold">
-                          <span className="text-slate-700">MONTHLY ACTIVE USERS</span>
-                          <span className="text-slate-500">10 / 50,000</span>
-                        </div>
-                        <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                          <div className="bg-[#3ecf8e] h-full rounded-full" style={{ width: "0.1%" }} />
-                        </div>
-                      </div>
-
-                      {/* File Storage */}
-                      <div className="space-y-1">
-                        <div className="flex justify-between items-center text-[10px] font-semibold">
-                          <span className="text-slate-700">FILE STORAGE</span>
-                          <span className="text-slate-500">0 GB / 1 GB</span>
-                        </div>
-                        <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                          <div className="bg-[#3ecf8e] h-full rounded-full" style={{ width: "0%" }} />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="border-t border-[#e5e7eb] pt-4">
-                      <Button
-                        onClick={() => toast.info("Redirecting to upgrade checkout...")}
-                        className="w-full bg-[#3ecf8e] hover:bg-[#34b27b] text-white font-bold text-xs h-8 rounded shadow-sm"
-                      >
-                        Upgrade to Pro
-                      </Button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1310,53 +1683,53 @@ export default function Home() {
                     </Button>
                   </div>
 
-                  <div className="min-h-[250px] bg-white">
-                    <ScrollArea className="h-[320px]">
-                      {logsLoading && logs.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center h-[200px] text-[#6b7280] text-xs">
-                          <div className="h-5 w-5 border-2 border-[#3ecf8e] border-t-transparent rounded-full animate-spin mb-3" />
-                          Streaming Supabase database tables...
-                        </div>
-                      ) : logs.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center h-[200px] text-center px-4">
-                          <p className="text-[#6b7280] text-xs font-semibold">No Telemetry Events Recorded</p>
-                          <p className="text-[#8c8c8c] text-[10px] max-w-xs mt-1">
-                            Use the seed scripts or click "Mock Server Crash" in the header to register logs.
-                          </p>
-                        </div>
-                      ) : (
-                        <Table>
-                          <TableHeader className="bg-[#f9fafb] sticky top-0 backdrop-blur-md z-10 border-b border-[#e5e7eb]">
-                            <TableRow className="border-[#e5e7eb]">
-                              <TableHead className="text-[11px] font-bold text-[#6b7280] w-[180px]">Timestamp</TableHead>
-                              <TableHead className="text-[11px] font-bold text-[#6b7280] w-[200px]">Project Name</TableHead>
-                              <TableHead className="text-[11px] font-bold text-[#6b7280] w-[90px]">Severity</TableHead>
-                              <TableHead className="text-[11px] font-bold text-[#6b7280]">Error Context Trace</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {logs.map((log) => (
-                              <TableRow key={log.event_id} className="border-[#e5e7eb] hover:bg-[#f9fafb] transition-colors">
-                                <TableCell className="text-[10px] font-mono text-[#6b7280]">
-                                  {new Date(log.timestamp).toLocaleString()}
-                                </TableCell>
-                                <TableCell className="font-bold text-xs text-[#111827]">
-                                  {log.active_projects?.project_name || "Unknown Project"}
-                                </TableCell>
-                                <TableCell>
-                                  {getSeverityBadge(log.error_trace)}
-                                </TableCell>
-                                <TableCell>
-                                  <pre className="text-[10px] text-[#374151] font-mono bg-[#f9fafb] p-2.5 border border-[#e5e7eb] rounded overflow-x-auto whitespace-pre-wrap leading-relaxed max-w-[620px]">
-                                    {log.error_trace}
-                                  </pre>
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      )}
-                    </ScrollArea>
+                  <div className="bg-white overflow-auto max-h-[500px] border-t border-[#e5e7eb]">
+                    {logsLoading && logs.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center h-[200px] text-[#6b7280] text-xs">
+                        <div className="h-5 w-5 border-2 border-[#3ecf8e] border-t-transparent rounded-full animate-spin mb-3" />
+                        Streaming Supabase database tables...
+                      </div>
+                    ) : logs.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center h-[200px] text-center px-4">
+                        <p className="text-[#6b7280] text-xs font-semibold">No Telemetry Events Recorded</p>
+                        <p className="text-[#8c8c8c] text-[10px] max-w-xs mt-1">
+                          Use the seed scripts or click "Mock Server Crash" in the header to register logs.
+                        </p>
+                      </div>
+                    ) : (
+                      <table className="w-full border-collapse text-left">
+                        <thead className="bg-[#f9fafb] border-b border-[#e5e7eb] sticky top-0 z-10">
+                          <tr>
+                            <th className="text-[11px] font-bold text-[#6b7280] px-4 py-3 whitespace-nowrap w-[15%] min-w-[150px]">Timestamp</th>
+                            <th className="text-[11px] font-bold text-[#6b7280] px-4 py-3 whitespace-nowrap w-[15%] min-w-[150px]">Project Name</th>
+                            <th className="text-[11px] font-bold text-[#6b7280] px-4 py-3 whitespace-nowrap w-[10%] min-w-[100px]">Severity</th>
+                            <th className="text-[11px] font-bold text-[#6b7280] px-4 py-3 w-[60%] min-w-[500px]">Error Context Trace</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#e5e7eb]">
+                          {logs.map((log) => (
+                            <tr key={log.event_id} className="hover:bg-[#f9fafb] transition-colors align-top">
+                              <td className="text-[10px] font-mono text-[#6b7280] px-4 py-3 whitespace-nowrap">
+                                {new Date(log.timestamp).toLocaleString()}
+                              </td>
+                              <td className="font-bold text-xs text-[#111827] px-4 py-3 whitespace-nowrap">
+                                {Array.isArray(log.active_projects)
+                                  ? (log.active_projects[0]?.project_name || "Unknown Project")
+                                  : (log.active_projects?.project_name || "Unknown Project")}
+                              </td>
+                              <td className="px-4 py-3">
+                                {getSeverityBadge(log.error_trace)}
+                              </td>
+                              <td className="px-4 py-3">
+                                <pre className="text-[10px] text-[#374151] font-mono bg-[#f9fafb] p-2.5 border border-[#e5e7eb] rounded whitespace-pre-wrap leading-relaxed break-all max-w-[800px]">
+                                  {log.error_trace}
+                                </pre>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
                   </div>
                 </div>
                 
@@ -1365,7 +1738,7 @@ export default function Home() {
 
             {/* CO-PILOT CHAT CONSOLE TAB */}
             {activeTab === "chat" && (
-              <div className="h-full flex gap-4 overflow-hidden min-w-0">
+              <div className="flex-1 min-h-0 flex gap-4 overflow-hidden min-w-0">
                 
                 {/* Chat Session History Left Column (Gemini Style) */}
                 <div className="w-56 bg-white border border-[#e5e7eb] rounded-lg flex flex-col overflow-hidden shrink-0 shadow-sm">
@@ -1488,7 +1861,7 @@ export default function Home() {
                         {interruptionReason && (
                           <div className="border bg-amber-50/50 border-amber-200 rounded-md p-4 space-y-3 mt-3">
                             <div className="flex items-center gap-1.5 text-[10px] text-amber-700 font-bold uppercase tracking-wider">
-                              <span>⚡</span> Interrupt Intercepted (HIL Action)
+                              <span>{"\u26A1"}</span> Interrupt Intercepted (HIL Action)
                             </div>
 
                             {/* Ticket Approval Panel */}
@@ -1598,18 +1971,24 @@ export default function Home() {
                                 <div className="flex gap-2">
                                   <Button
                                     onClick={() => triggerAgentMessage("yes")}
-                                    className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white text-xs h-8 flex-1 font-bold rounded shadow-sm"
+                                    className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white text-xs h-8 flex-1 font-bold rounded shadow-sm flex items-center justify-center gap-1.5"
                                     disabled={sendingMessage}
                                   >
-                                    ✓ Yes, Schedule All Syncs
+                                    <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    Yes, Schedule All Syncs
                                   </Button>
                                   <Button
                                     onClick={() => triggerAgentMessage("no")}
                                     variant="outline"
-                                    className="border-[#e5e7eb] hover:bg-[#f9fafb] text-red-600 text-xs h-8 flex-1 rounded bg-white"
+                                    className="border-[#e5e7eb] hover:bg-[#f9fafb] text-red-600 text-xs h-8 flex-1 rounded bg-white flex items-center justify-center gap-1.5"
                                     disabled={sendingMessage}
                                   >
-                                    ✕ Skip / Dismiss
+                                    <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                    Skip / Dismiss
                                   </Button>
                                 </div>
                               </div>
@@ -1646,7 +2025,7 @@ export default function Home() {
                         className="text-[10px] px-2.5 py-1.5 rounded-md bg-white hover:bg-[#f9fafb] border border-[#e5e7eb] text-[#374151] font-medium transition-colors cursor-pointer shadow-sm"
                         disabled={sendingMessage}
                       >
-                        🔍 Triage Latest Crash
+                        {"\uD83D\uDD0D"} Triage Latest Crash
                       </button>
                     </div>
                   )}
@@ -1679,7 +2058,7 @@ export default function Home() {
 
             {/* TEAM TAB */}
             {activeTab === "team" && (
-              <div className="h-full flex flex-col space-y-5 bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm overflow-hidden">
+              <div className="flex-1 min-h-0 flex flex-col space-y-5 bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm overflow-hidden">
                 <div className="flex items-center justify-between">
                   <div>
                     <h2 className="text-sm font-bold text-slate-900">Corporate Team Directory</h2>
@@ -1726,7 +2105,7 @@ export default function Home() {
                                   <button
                                     onClick={() => {
                                       const repoName = localStorage.getItem("ael_selected_repo_name") || "[select a project in Settings]";
-                                      setActiveTab("chat");
+                                      switchTab("chat");
                                       setTimeout(() => {
                                         const prompt = `Assign ${member.name} (${member.email_address}) to the project ${repoName}`;
                                         triggerAgentMessage(prompt);
@@ -1739,7 +2118,7 @@ export default function Home() {
                                   {/* Schedule sync via chat */}
                                   <button
                                     onClick={() => {
-                                      setActiveTab("chat");
+                                      switchTab("chat");
                                       setTimeout(() => {
                                         triggerAgentMessage(`Schedule a follow-up sync meeting with ${member.name} at ${member.email_address} for overdue task review`);
                                       }, 200);
@@ -1762,7 +2141,7 @@ export default function Home() {
 
             {/* INTEGRATIONS TAB */}
             {activeTab === "integrations" && (
-              <div className="h-full overflow-y-auto space-y-6">
+              <div className="flex-1 min-h-0 overflow-y-auto space-y-6">
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">Third-Party Integration Modules</h2>
                   <p className="text-xs text-slate-500 mt-0.5">Control live connectivity APIs linked to the AEL agent loop.</p>
@@ -1867,7 +2246,7 @@ export default function Home() {
                         </div>
                         <div>
                           <h3 className="text-xs font-bold text-slate-950">Slack Webhooks</h3>
-                          <span className="text-[9px] bg-yellow-50 text-yellow-800 border border-yellow-100 px-1.5 py-0.2 rounded font-bold">Standby</span>
+                          <span className="text-[9px] bg-yellow-50 text-yellow-800 border border-yellow-100 px-1.5 py-0.5 rounded font-bold">Standby</span>
                         </div>
                       </div>
                       <span className="text-[10px] text-slate-400 font-mono">Webhooks</span>
@@ -1892,7 +2271,7 @@ export default function Home() {
 
             {/* USAGE TAB — REAL SUPABASE DATA */}
             {activeTab === "usage" && (
-              <div className="h-full overflow-y-auto space-y-5">
+              <div className="flex-1 min-h-0 overflow-y-auto space-y-5">
                 {/* Header */}
                 <div className="bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm flex items-start justify-between">
                   <div>
@@ -1912,7 +2291,7 @@ export default function Home() {
                     variant="outline"
                     className="border-[#e5e7eb] hover:bg-[#f9fafb] text-xs h-7 text-[#374151] font-semibold"
                   >
-                    {usageLoading ? "Syncing..." : "↻ Refresh"}
+                    {usageLoading ? "Syncing..." : "\u21BB Refresh"}
                   </Button>
                 </div>
 
@@ -1923,21 +2302,21 @@ export default function Home() {
                   </div>
                 ) : (
                   <>
-                    {/* ── Row 1: Event & Record Counts ── */}
+                    {/* — Row 1: Event & Record Counts — */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                       <div className="bg-white border border-[#e5e7eb] p-4 rounded-lg shadow-sm space-y-1">
                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">System Events</p>
                         <p className="text-2xl font-extrabold text-slate-950">
-                          {usageData?.totalEvents.toLocaleString() ?? "—"}
+                          {usageData?.totalEvents.toLocaleString() ?? "\u2014"}
                         </p>
                         <div className="flex items-center gap-1">
                           {(usageData?.weeklyChangePercent ?? 0) >= 0 ? (
                             <span className="text-[9px] text-emerald-600 font-bold">
-                              ↑ {Math.abs(usageData?.weeklyChangePercent ?? 0)}% this week
+                              {"\u2191"} {Math.abs(usageData?.weeklyChangePercent ?? 0)}% this week
                             </span>
                           ) : (
                             <span className="text-[9px] text-red-500 font-bold">
-                              ↓ {Math.abs(usageData?.weeklyChangePercent ?? 0)}% this week
+                              {"\u2193"} {Math.abs(usageData?.weeklyChangePercent ?? 0)}% this week
                             </span>
                           )}
                         </div>
@@ -1947,7 +2326,7 @@ export default function Home() {
                       <div className="bg-white border border-[#e5e7eb] p-4 rounded-lg shadow-sm space-y-1">
                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Sprint Tasks</p>
                         <p className="text-2xl font-extrabold text-slate-950">
-                          {usageData?.totalTasks.toLocaleString() ?? "—"}
+                          {usageData?.totalTasks.toLocaleString() ?? "\u2014"}
                         </p>
                         <p className="text-[9px] text-amber-600 font-semibold">
                           {usageData?.overdueTasks ?? 0} overdue / critical
@@ -1958,7 +2337,7 @@ export default function Home() {
                       <div className="bg-white border border-[#e5e7eb] p-4 rounded-lg shadow-sm space-y-1">
                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Team Members</p>
                         <p className="text-2xl font-extrabold text-slate-950">
-                          {usageData?.totalMembers.toLocaleString() ?? "—"}
+                          {usageData?.totalMembers.toLocaleString() ?? "\u2014"}
                         </p>
                         <p className="text-[9px] text-emerald-600 font-semibold">Registered in corporate registry</p>
                         <p className="text-[9px] text-slate-400">Total rows in team_members</p>
@@ -1967,14 +2346,14 @@ export default function Home() {
                       <div className="bg-white border border-[#e5e7eb] p-4 rounded-lg shadow-sm space-y-1">
                         <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Active Projects</p>
                         <p className="text-2xl font-extrabold text-slate-950">
-                          {usageData?.totalProjects.toLocaleString() ?? "—"}
+                          {usageData?.totalProjects.toLocaleString() ?? "\u2014"}
                         </p>
                         <p className="text-[9px] text-emerald-600 font-semibold">Linked GitHub repos</p>
                         <p className="text-[9px] text-slate-400">Total rows in active_projects</p>
                       </div>
                     </div>
 
-                    {/* ── Row 2: Week-over-Week Comparison ── */}
+                    {/* — Row 2: Week-over-Week Comparison — */}
                     <div className="bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm">
                       <h3 className="text-xs font-bold text-slate-900 mb-4">Week-over-Week Event Activity</h3>
                       <div className="grid grid-cols-2 gap-6">
@@ -2015,7 +2394,7 @@ export default function Home() {
                       </div>
                     </div>
 
-                    {/* ── Row 3: Real Hourly Event Chart ── */}
+                    {/* — Row 3: Real Hourly Event Chart — */}
                     <div className="bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm">
                       <div className="flex items-center justify-between mb-4">
                         <div>
@@ -2074,7 +2453,7 @@ export default function Home() {
 
             {/* ORGANIZATION SETTINGS TAB */}
             {activeTab === "settings" && (
-              <div className="h-full overflow-y-auto space-y-6">
+              <div className="flex-1 min-h-0 overflow-y-auto space-y-6">
                 
                 {/* 1. Dynamic Model Selection Panel */}
                 <div className="bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm space-y-4">
@@ -2132,7 +2511,7 @@ export default function Home() {
                                 }`}
                               >
                                 <span>{m}</span>
-                                {selectedModel === m && <span className="text-[10px] text-emerald-600">✓ Active</span>}
+                                {selectedModel === m && <span className="text-[10px] text-emerald-600">{"\u2713"} Active</span>}
                               </div>
                             ))}
                           </div>
@@ -2159,7 +2538,7 @@ export default function Home() {
                       disabled={githubReposLoading}
                       className="text-[11px] text-[#3ecf8e] font-bold hover:underline disabled:opacity-50"
                     >
-                      {githubReposLoading ? "Fetching..." : "↻ Refresh"}
+                      {githubReposLoading ? "Fetching..." : "\u21BB Refresh"}
                     </button>
                   </div>
 
@@ -2193,25 +2572,27 @@ export default function Home() {
                               (r.description || "").toLowerCase().includes(githubRepoSearch.toLowerCase())
                             )
                             .map((repo) => {
-                              const isActive = selectedProjectId === String(repo.id);
+                              const matchedProject = projects.find(p => p.github_repo_url === repo.html_url);
+                              const isAdded = !!matchedProject;
+                              const isActive = matchedProject ? (selectedProjectId === matchedProject.project_id) : false;
                               return (
                                 <div
                                   key={repo.id}
                                   onClick={() => {
-                                    setSelectedProjectId(String(repo.id));
-                                    localStorage.setItem("ael_selected_project", String(repo.id));
-                                    localStorage.setItem("ael_selected_repo_url", repo.html_url);
-                                    localStorage.setItem("ael_selected_repo_name", repo.full_name);
-                                    toast.success(`Agent context: ${repo.full_name}`);
+                                    if (matchedProject) {
+                                      handleSelectProject(matchedProject);
+                                    }
                                   }}
-                                  className={`px-3 py-2.5 rounded cursor-pointer transition-colors flex items-start justify-between gap-3 ${
+                                  className={`px-3 py-2.5 rounded transition-colors flex items-start justify-between gap-3 ${
                                     isActive
                                       ? "bg-emerald-50 border border-emerald-100"
-                                      : "hover:bg-slate-100"
-                                  }`}
+                                      : isAdded
+                                        ? "hover:bg-slate-100 border border-transparent bg-slate-50/50"
+                                        : "hover:bg-slate-100 border border-dashed border-slate-200"
+                                  } ${isAdded ? "cursor-pointer" : "cursor-default"}`}
                                 >
                                   <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex items-center gap-2 flex-wrap">
                                       {isActive && <span className="w-1.5 h-1.5 rounded-full bg-[#3ecf8e] shrink-0" />}
                                       <span className={`text-[11px] font-mono font-bold truncate ${
                                         isActive ? "text-emerald-800" : "text-slate-800"
@@ -2221,32 +2602,76 @@ export default function Home() {
                                       {repo.private && (
                                         <span className="text-[9px] bg-slate-200 text-slate-600 px-1 rounded font-semibold shrink-0">Private</span>
                                       )}
+                                      {matchedProject && (
+                                        <span className={`text-[9px] font-bold border px-1.5 py-0.2 rounded uppercase shrink-0 ${
+                                          matchedProject.status === "completed"
+                                            ? "bg-blue-50 text-blue-700 border-blue-200"
+                                            : matchedProject.status === "paused"
+                                              ? "bg-amber-50 text-amber-800 border-amber-200"
+                                              : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                        }`}>
+                                          {matchedProject.status || "active"}
+                                        </span>
+                                      )}
                                     </div>
                                     {repo.description && (
                                       <p className="text-[10px] text-slate-400 mt-0.5 truncate">{repo.description}</p>
                                     )}
                                     <div className="flex items-center gap-3 mt-1 text-[9px] text-slate-400">
                                       {repo.language && <span>{repo.language}</span>}
-                                      <span>★ {repo.stars}</span>
-                                      <span>⑂ {repo.forks}</span>
+                                      <span>{"\u2605"} {repo.stars}</span>
+                                      <span>{"\u2146"} {repo.forks}</span>
                                       {repo.open_issues > 0 && (
-                                        <span className="text-amber-500">● {repo.open_issues} open issues</span>
+                                        <span className="text-amber-500">{"\u25CF"} {repo.open_issues} open issues</span>
                                       )}
                                       <span>Pushed {new Date(repo.pushed_at).toLocaleDateString()}</span>
                                     </div>
                                   </div>
-                                  <div className="shrink-0 flex flex-col items-end gap-1">
-                                    {isActive && (
-                                      <span className="text-[9px] text-emerald-600 font-bold">✓ Active</span>
-                                    )}
+                                  <div className="shrink-0 flex flex-col items-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                    <div className="flex items-center gap-1">
+                                      {isAdded ? (
+                                        <>
+                                          {!isActive && (
+                                            <button
+                                              onClick={() => handleSelectProject(matchedProject)}
+                                              className="text-[9px] font-bold bg-[#3ecf8e] text-white hover:bg-[#32af76] px-1.5 py-0.5 rounded transition-colors"
+                                            >
+                                              Select
+                                            </button>
+                                          )}
+                                          <button
+                                            onClick={() => handleMarkProjectCompleted(matchedProject.project_id, matchedProject.status !== "completed")}
+                                            className={`text-[9px] font-bold border px-1.5 py-0.5 rounded transition-colors ${
+                                              matchedProject.status === "completed"
+                                                ? "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200"
+                                                : "bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+                                            }`}
+                                          >
+                                            {matchedProject.status === "completed" ? "Reactivate" : "Complete"}
+                                          </button>
+                                          <button
+                                            onClick={() => handleDeselectGithubRepoProject(repo.html_url, repo.name)}
+                                            className="text-[9px] font-bold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-0.5 rounded transition-colors"
+                                          >
+                                            Deselect
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <button
+                                          onClick={() => handleSelectGithubRepoAsProject(repo)}
+                                          className="text-[9px] font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded transition-colors"
+                                        >
+                                          + Add Project
+                                        </button>
+                                      )}
+                                    </div>
                                     <a
                                       href={repo.html_url}
                                       target="_blank"
                                       rel="noopener noreferrer"
-                                      onClick={e => e.stopPropagation()}
                                       className="text-[9px] text-slate-400 hover:text-[#3ecf8e] hover:underline"
                                     >
-                                      Open ↗
+                                      Open â†—
                                     </a>
                                   </div>
                                 </div>
@@ -2271,7 +2696,7 @@ export default function Home() {
           <footer className="h-9 border-t border-[#e5e7eb] bg-white flex items-center justify-between px-6 text-[10px] text-[#6b7280] shrink-0">
             <div className="flex items-center gap-2">
               <span>AEL SRE Agent v1.5.0</span>
-              <span>•</span>
+              <span className="h-1 w-1 rounded-full bg-slate-300 inline-block shrink-0" />
               <span className="font-mono bg-slate-100 text-slate-600 px-1 rounded">Active Model: {selectedModel.replace("models/", "")}</span>
             </div>
             <div className="flex items-center gap-1.5">
@@ -2293,13 +2718,48 @@ export default function Home() {
               <h3 className="font-bold text-slate-950 text-xs uppercase tracking-wider">Register New Workspace Project</h3>
               <button 
                 onClick={() => setIsNewProjectOpen(false)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-semibold p-1"
+                className="text-slate-400 hover:text-slate-600 p-1 flex items-center justify-center"
               >
-                ✕
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
               </button>
             </div>
 
             <form onSubmit={handleCreateProjectSubmit} className="p-4 space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold text-slate-400 uppercase">Select GitHub Repository</label>
+                {githubReposLoading ? (
+                  <div className="text-[11px] text-slate-500 flex items-center gap-1.5 h-9 px-3 border border-[#e5e7eb] rounded bg-slate-50 font-medium">
+                    <div className="h-3.5 w-3.5 border-2 border-slate-400 border-t-transparent rounded-full animate-spin" />
+                    Loading your repositories...
+                  </div>
+                ) : githubRepos.length === 0 ? (
+                  <div className="text-[10px] text-amber-600 border border-amber-100 rounded bg-amber-50/50 p-2.5 leading-relaxed font-semibold">
+                    No repositories found. Ensure your GITHUB_PAT token in the environment settings is valid.
+                  </div>
+                ) : (
+                  <select
+                    onChange={(e) => {
+                      const repo = githubRepos.find(r => r.html_url === e.target.value);
+                      if (repo) {
+                        setNewProjName(repo.name);
+                        setNewProjRepo(repo.html_url);
+                      }
+                    }}
+                    value={newProjRepo}
+                    className="w-full border border-[#e5e7eb] rounded bg-white text-xs h-9 px-2.5 text-black font-semibold focus-visible:outline-none focus:border-[#3ecf8e] focus:ring-1 focus:ring-[#3ecf8e]"
+                  >
+                    <option value="">-- Select repository to auto-fill --</option>
+                    {githubRepos.map((repo) => (
+                      <option key={repo.id} value={repo.html_url}>
+                        {repo.full_name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
               <div className="space-y-1.5">
                 <label className="text-[10px] font-bold text-slate-400 uppercase">Project Name</label>
                 <Input
@@ -2307,7 +2767,7 @@ export default function Home() {
                   placeholder="e.g. website, core-api, backend-db"
                   value={newProjName}
                   onChange={(e) => setNewProjName(e.target.value)}
-                  className="bg-white border-[#e5e7eb] text-xs h-9 rounded text-black"
+                  className="bg-white border-[#e5e7eb] text-xs h-9 rounded text-black font-semibold"
                 />
               </div>
 
@@ -2318,38 +2778,11 @@ export default function Home() {
                   placeholder="e.g. https://github.com/org/repo"
                   value={newProjRepo}
                   onChange={(e) => setNewProjRepo(e.target.value)}
-                  className="bg-white border-[#e5e7eb] text-xs h-9 rounded text-black"
+                  className="bg-white border-[#e5e7eb] text-xs h-9 rounded text-black font-mono"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase">AWS Deploy Region</label>
-                  <select
-                    value={newProjRegion}
-                    onChange={(e) => setNewProjRegion(e.target.value)}
-                    className="w-full border border-[#e5e7eb] rounded bg-white text-xs h-9 px-2.5 text-[#374151] focus-visible:outline-none"
-                  >
-                    <option value="us-east-1">us-east-1 (N. Virginia)</option>
-                    <option value="ap-southeast-1">ap-southeast-1 (Singapore)</option>
-                    <option value="ap-northeast-1">ap-northeast-1 (Tokyo)</option>
-                    <option value="eu-central-1">eu-central-1 (Frankfurt)</option>
-                  </select>
-                </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase">Instance Size</label>
-                  <select
-                    value={newProjSize}
-                    onChange={(e) => setNewProjSize(e.target.value)}
-                    className="w-full border border-[#e5e7eb] rounded bg-white text-xs h-9 px-2.5 text-[#374151] focus-visible:outline-none"
-                  >
-                    <option value="NANO">NANO (0.5 vCPU, 512MB RAM)</option>
-                    <option value="MICRO">MICRO (1 vCPU, 1GB RAM)</option>
-                    <option value="SMALL">SMALL (1 vCPU, 2GB RAM)</option>
-                  </select>
-                </div>
-              </div>
 
               <div className="flex gap-2 pt-2 justify-end">
                 <Button
@@ -2376,3 +2809,4 @@ export default function Home() {
     </div>
   );
 }
+

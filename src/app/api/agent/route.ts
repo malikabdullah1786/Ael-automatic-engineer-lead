@@ -84,7 +84,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Extract the final messages list and control properties
-    const messages = responseState.messages || [];
+    const finalState = responseState || (await graph.getState(config)).values || {};
+    const messages = finalState.messages || [];
     const lastMessage = messages[messages.length - 1];
     
     return NextResponse.json({
@@ -94,8 +95,8 @@ export async function POST(req: NextRequest) {
         role: m.role || (m.constructor.name === "HumanMessage" ? "user" : "assistant"),
         content: m.content
       })),
-      interruptionReason: responseState.interruptionReason,
-      pendingAction: responseState.pendingAction
+      interruptionReason: finalState.interruptionReason,
+      pendingAction: finalState.pendingAction
     });
 
   } catch (error: any) {

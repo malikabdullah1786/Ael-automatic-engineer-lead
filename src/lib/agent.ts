@@ -626,7 +626,43 @@ async function prepActionNode(state: typeof AgentState.State) {
     const lastMessage = state.messages[state.messages.length - 1]?.content || "";
     const responseLower = lastMessage.toLowerCase().trim();
 
-    // If user says "yes" or approved:
+    // 1. Check if the message contains a new email address to update the draft/assignee
+    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+    const emailMatch = lastMessage.match(emailRegex);
+    if (emailMatch) {
+      const extractedEmail = emailMatch[0].toLowerCase().trim();
+      
+      try {
+        if (state.devId) {
+          await supabase
+            .from("team_members")
+            .update({ email_address: extractedEmail })
+            .eq("dev_id", state.devId);
+        }
+      } catch (dbErr) {
+        console.error("Failed to update developer email in database:", dbErr);
+      }
+      
+      const updatedAction = {
+        ...state.pendingAction,
+        schedule: {
+          ...state.pendingAction.schedule,
+          email: extractedEmail
+        }
+      };
+      
+      return {
+        devEmail: extractedEmail,
+        pendingAction: updatedAction,
+        interruptionReason: "human_approval_required",
+        messages: [{
+          role: "assistant",
+          content: `\uD83D\uDCE7 **Email Updated:** I have updated the email for **${state.devName}** to **${extractedEmail}** in the team directory and the draft action.\n\nShould I execute this action now? (Type **yes** to approve, or **no** to cancel)`
+        }]
+      };
+    }
+
+    // 2. If user says "yes" or approved:
     if (responseLower === "yes" || responseLower === "approve" || state.actionApproved === true) {
       return {
         actionApproved: true
@@ -659,7 +695,7 @@ async function prepActionNode(state: typeof AgentState.State) {
     interruptionReason: "human_approval_required",
     messages: [{
       role: "assistant",
-      content: `📋 **Incident Action Drafted:**\n- **Project ID:** ${state.projectId}\n- **Assignee:** ${state.devName} (${state.devEmail})\n- **Triage Action:** File incident ticket & schedule a 15-minute Google Meet.\n\nShould I execute this action? (Type **yes** to approve, or **no** to cancel)`
+      content: `\uD83D\uDCCB **Incident Action Drafted:**\n- **Project ID:** ${state.projectId}\n- **Assignee:** ${state.devName} (${state.devEmail})\n- **Triage Action:** File incident ticket & schedule a 15-minute Google Meet.\n\nShould I execute this action? (Type **yes** to approve, or **no** to cancel)`
     }]
   };
 }
