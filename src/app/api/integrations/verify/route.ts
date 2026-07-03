@@ -118,8 +118,94 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // ── 4. Jira Connection Ping ───────────────────────────────────────────────
+  if (service === "jira") {
+    try {
+      const { JiraService } = require("../../../../lib/services/jira.service");
+      const jira = new JiraService();
+      const connected = await jira.verifyConnection();
+      if (connected) {
+        return NextResponse.json({
+          ok: true,
+          message: "Jira connection verified successfully.",
+        });
+      } else {
+        return NextResponse.json(
+          { ok: false, message: "Jira connection failed. Please check your credentials." },
+          { status: 401 }
+        );
+      }
+    } catch (err: any) {
+      return NextResponse.json(
+        { ok: false, message: `Jira connection error: ${err.message}` },
+        { status: 500 }
+      );
+    }
+  }
+
   return NextResponse.json(
-    { ok: false, message: "Unknown service. Use ?service=github|supabase|slack" },
+    { ok: false, message: "Unknown service. Use ?service=github|supabase|slack|jira" },
     { status: 400 }
   );
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { service, host, email, apiToken } = body;
+
+    if (service === "jira") {
+      if (!host || !email || !apiToken) {
+        return NextResponse.json(
+          { ok: false, message: "Missing required Jira configuration fields (host, email, apiToken)." },
+          { status: 400 }
+        );
+      }
+
+      const { JiraService } = require("../../../../lib/services/jira.service");
+      const jira = new JiraService();
+      const testConfig = { host, email, apiToken };
+      const connected = await jira.verifyConnection(testConfig);
+
+      if (!connected) {
+        return NextResponse.json(
+          { ok: false, message: "Jira connection check failed with these credentials." },
+          { status: 400 }
+        );
+      }
+
+      // Save to system_settings
+      const supabase = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!
+      );
+
+      const { error } = await supabase
+        .from("system_settings")
+        .upsert(
+          { key: "jira_config", value: testConfig, updated_at: new Date().toISOString() },
+          { onConflict: "key" }
+        );
+
+      if (error) {
+        throw new Error(`Failed to save settings: ${error.message}`);
+      }
+
+      return NextResponse.json({
+        ok: true,
+        message: "Jira credentials verified and saved successfully to database.",
+      });
+    }
+
+    return NextResponse.json(
+      { ok: false, message: "Unsupported service in POST request." },
+      { status: 400 }
+    );
+  } catch (err: any) {
+    console.error("POST /api/integrations/verify error:", err);
+    return NextResponse.json(
+      { ok: false, message: `Error: ${err.message}` },
+      { status: 500 }
+    );
+  }
 }

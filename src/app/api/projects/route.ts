@@ -14,14 +14,14 @@ export async function GET(req: NextRequest) {
   try {
     let { data: projects, error } = await supabase
       .from("active_projects")
-      .select("project_id, project_name, github_repo_url, status, created_at")
+      .select("project_id, project_name, github_repo_url, status, jira_project_key, created_at")
       .order("project_name", { ascending: true });
 
     if (error && isStatusColumnMissing(error.message)) {
       // Fallback: select without status column
       const fallbackRes = await supabase
         .from("active_projects")
-        .select("project_id, project_name, github_repo_url, created_at")
+        .select("project_id, project_name, github_repo_url, jira_project_key, created_at")
         .order("project_name", { ascending: true });
 
       if (fallbackRes.error) {
@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { name, github_repo_url, status } = await req.json();
+    const { name, github_repo_url, status, jira_project_key } = await req.json();
 
     if (!name || !github_repo_url) {
       return NextResponse.json({ error: "Missing name or github_repo_url parameters." }, { status: 400 });
@@ -55,7 +55,8 @@ export async function POST(req: NextRequest) {
 
     const payload: any = {
       project_name: name,
-      github_repo_url: github_repo_url
+      github_repo_url: github_repo_url,
+      jira_project_key: jira_project_key || null
     };
     if (status) {
       payload.status = status;
@@ -97,15 +98,23 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   try {
-    const { projectId, status } = await req.json();
+    const { projectId, status, jira_project_key } = await req.json();
 
-    if (!projectId || !status) {
-      return NextResponse.json({ error: "Missing projectId or status parameters." }, { status: 400 });
+    if (!projectId) {
+      return NextResponse.json({ error: "Missing projectId parameter." }, { status: 400 });
+    }
+
+    const updatePayload: any = {};
+    if (status !== undefined) {
+      updatePayload.status = status;
+    }
+    if (jira_project_key !== undefined) {
+      updatePayload.jira_project_key = jira_project_key ? jira_project_key.trim().toUpperCase() : null;
     }
 
     const { data: project, error } = await supabase
       .from("active_projects")
-      .update({ status })
+      .update(updatePayload)
       .eq("project_id", projectId)
       .select()
       .single();

@@ -661,6 +661,27 @@ export default function Home() {
     }
   };
 
+  const handleDeleteMember = async (dev_id: string, name: string) => {
+    if (!confirm(`Are you sure you want to remove team member '${name}'?`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/team?dev_id=${dev_id}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(`Removed team member '${name}' successfully.`);
+        fetchTeam();
+      } else {
+        toast.error(data.error || "Failed to remove team member.");
+      }
+    } catch (err) {
+      toast.error("Network error removing team member.");
+    }
+  };
+
+
   // Switch selected active project
   const handleSelectProject = (p: any) => {
     setSelectedProjectId(p.project_id);
@@ -2063,6 +2084,52 @@ export default function Home() {
                                 </div>
                               </div>
                             )}
+                            {/* Project Selection Panel */}
+                            {interruptionReason === "project_selection_required" && (
+                              <div className="space-y-2">
+                                <p className="text-[11px] text-[#374151] font-semibold leading-relaxed">
+                                  Multiple projects found. Please select which project this scheduling request belongs to:
+                                </p>
+                                <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto pr-1">
+                                  {projects.map((p, idx) => (
+                                    <Button
+                                      key={p.project_id}
+                                      onClick={() => triggerAgentMessage(p.project_name)}
+                                      className="bg-white border border-[#e5e7eb] hover:bg-[#f9fafb] text-[#111827] text-xs h-8 justify-start font-semibold rounded shadow-sm text-left px-3 flex items-center gap-2"
+                                      disabled={sendingMessage}
+                                    >
+                                      <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">
+                                        {idx + 1}
+                                      </span>
+                                      <span className="truncate">{p.project_name}</span>
+                                    </Button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {/* Jira Assignee Selection Panel */}
+                            {interruptionReason === "jira_assignee_selection_required" && (
+                              <div className="space-y-2">
+                                <p className="text-[11px] text-[#374151] font-semibold leading-relaxed">
+                                  Select a developer to assign this Jira issue to:
+                                </p>
+                                <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto pr-1">
+                                  {team.map((member, idx) => (
+                                    <Button
+                                      key={member.dev_id}
+                                      onClick={() => triggerAgentMessage(member.name)}
+                                      className="bg-white border border-[#e5e7eb] hover:bg-[#f9fafb] text-[#111827] text-xs h-8 justify-start font-semibold rounded shadow-sm text-left px-3 flex items-center gap-2"
+                                      disabled={sendingMessage}
+                                    >
+                                      <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">
+                                        {idx + 1}
+                                      </span>
+                                      <span className="truncate">{member.name} ({member.email_address})</span>
+                                    </Button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
 
                           </div>
                         )}
@@ -2180,6 +2247,13 @@ export default function Home() {
                               </TableCell>
                               <TableCell>
                                 <div className="flex items-center gap-2">
+                                  {/* Remove member */}
+                                  <button
+                                    onClick={() => handleDeleteMember(member.dev_id, member.name)}
+                                    className="text-[10px] px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 font-semibold transition-colors"
+                                  >
+                                    Remove
+                                  </button>
                                   {/* Assign to Project via chat */}
                                   <button
                                     onClick={() => {

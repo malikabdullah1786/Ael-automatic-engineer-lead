@@ -61,10 +61,11 @@ export async function POST(req: NextRequest) {
         ? await graph.invoke({}, config)
         : await graph.invoke(null, config);
     }
-    // Case 3: Resuming from an active interrupt state via general text message (e.g. workload_overload)
+    // Case 3: Resuming from an active interrupt state via general text message
+    // NOTE: Do NOT clear interruptionReason here — routeIntentNode reads it and clears it
+    // internally after handling the response. Pre-clearing it breaks all interrupt routing.
     else if (hasInterrupt && message) {
       await graph.updateState(config, {
-        interruptionReason: null,
         messages: [{ role: "user", content: message }]
       });
       
@@ -87,6 +88,18 @@ export async function POST(req: NextRequest) {
     const finalState = responseState || (await graph.getState(config)).values || {};
     const messages = finalState.messages || [];
     const lastMessage = messages[messages.length - 1];
+
+    try {
+      const fs = require("fs");
+      const logPath = "C:\\Users\\malik\\.gemini\\antigravity\\brain\\a0f1e6b0-697a-4254-8120-5e46f9fdafec\\scratch\\state_log.json";
+      fs.writeFileSync(logPath, JSON.stringify({
+        timestamp: new Date().toISOString(),
+        currentStateValues: currentState.values,
+        finalStateValues: finalState,
+      }, null, 2));
+    } catch (fsErr) {
+      console.error("Failed to write state log:", fsErr);
+    }
     
     return NextResponse.json({
       success: true,

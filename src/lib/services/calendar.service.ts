@@ -25,7 +25,8 @@ export class GoogleCalendarService implements ICalendarService {
     devName: string,
     errorContext: string,
     projectName: string,
-    ticketId: string
+    ticketId: string,
+    meetingTime?: string | null
   ): Promise<MeetingDetails> {
     const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
     if (!refreshToken || refreshToken === "your_oauth_refresh_token_for_offline_access") {
@@ -67,7 +68,7 @@ export class GoogleCalendarService implements ICalendarService {
       return d;
     };
 
-    const startTime = adjustToBusinessHours(proposedTime);
+    const startTime = meetingTime ? new Date(meetingTime) : adjustToBusinessHours(proposedTime);
     const endTime = new Date(startTime.getTime() + 30 * 60 * 1000); // 30-minute duration
 
     const eventPayload = {
@@ -99,6 +100,7 @@ export class GoogleCalendarService implements ICalendarService {
         calendarId: "primary",
         requestBody: eventPayload,
         conferenceDataVersion: 1,
+        sendUpdates: "all",
       });
 
       const event = response.data;
