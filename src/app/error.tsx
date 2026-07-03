@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect } from "react";
-import { Button } from "@/components/ui/button";
 
 interface ErrorProps {
   error: Error & { digest?: string };
@@ -26,21 +25,20 @@ export default function Error({ error, reset }: ErrorProps) {
   }, [error]);
 
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-slate-950 px-4 py-8 text-slate-100 antialiased selection:bg-red-500/30">
-      {/* Background visual details */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(244,63,94,0.07),transparent_50%)]" />
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] rounded-full bg-red-650/5 blur-[120px] pointer-events-none" />
+    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-[#fafbfa] px-4 py-8 text-slate-800 antialiased selection:bg-[#3ecf8e]/20">
+      {/* Subtle background gradient details to make it feel premium */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(62,207,142,0.04),transparent_60%)] pointer-events-none" />
 
-      <div className="relative z-10 flex max-w-md w-full flex-col items-center border border-slate-900/80 bg-slate-900/30 backdrop-blur-md rounded-2xl p-8 shadow-2xl text-center">
-        {/* Sleek icon / warning mark */}
-        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-950/40 border border-red-500/20 text-red-500 mb-6 shadow-inner">
+      <div className="relative z-10 flex max-w-md w-full flex-col items-center border border-[#e5e7eb] bg-white rounded-2xl p-8 shadow-lg text-center">
+        {/* Warning Icon Badge */}
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-50 border border-red-150 text-red-500 mb-6 shadow-sm">
           <svg
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
             viewBox="0 0 24 24"
-            strokeWidth={1.5}
+            strokeWidth={1.8}
             stroke="currentColor"
-            className="w-6 h-6 animate-pulse"
+            className="w-6 h-6 text-red-500 animate-pulse"
           >
             <path
               strokeLinecap="round"
@@ -50,28 +48,27 @@ export default function Error({ error, reset }: ErrorProps) {
           </svg>
         </div>
 
-        <h2 className="text-xl font-bold tracking-tight text-slate-50 mb-2">
+        <h2 className="text-base font-bold tracking-tight text-slate-900 mb-2 uppercase">
           System Diagnostics Triggered
         </h2>
         
-        <p className="text-sm text-slate-400 leading-relaxed mb-6">
-          An unexpected application crash has occurred. The error trace was intercepted and forwarded to the **Autonomous Engineering Lead** for immediate triage.
+        <p className="text-xs text-slate-500 leading-relaxed mb-6">
+          An unexpected application crash has occurred. The error trace was intercepted and forwarded to the <strong className="font-semibold text-slate-900">Autonomous Engineering Lead</strong> for immediate triage.
         </p>
 
         <div className="flex w-full flex-col sm:flex-row gap-3 justify-center">
-          <Button
+          <button
             onClick={() => reset()}
-            className="w-full sm:w-auto bg-slate-100 text-slate-900 hover:bg-slate-200 transition-colors"
+            className="w-full sm:w-auto bg-[#3ecf8e] hover:bg-[#34b27b] text-white font-bold text-xs h-9 px-5 rounded-lg shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-[#3ecf8e]/50"
           >
             Try Recovery
-          </Button>
-          <Button
-            onClick={() => window.location.href = "/"}
-            variant="outline"
-            className="w-full sm:w-auto border-slate-800 text-slate-350 hover:bg-slate-900/50 hover:text-slate-200 transition-colors"
+          </button>
+          <button
+            onClick={() => { window.location.href = "/"; }}
+            className="w-full sm:w-auto border border-[#e5e7eb] bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs h-9 px-5 rounded-lg transition-all focus:outline-none focus:ring-2 focus:ring-slate-200"
           >
             Return Home
-          </Button>
+          </button>
         </div>
       </div>
     </div>

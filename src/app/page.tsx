@@ -145,6 +145,14 @@ export default function Home() {
     if (typeof window !== "undefined") localStorage.setItem("ael_active_tab", tab);
   };
 
+  const handlePromptClick = (text: string) => {
+    navigator.clipboard.writeText(text);
+    toast.success(`Copied: "${text}"`);
+    setInputMessage(text);
+    switchTab("chat");
+    navigateTo("app");
+  };
+
   // Dynamic Selected Gemini Model (Persisted)
   const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
   const [modelSearch, setModelSearch] = useState("");
@@ -185,6 +193,14 @@ export default function Home() {
   const [newProjRegion, setNewProjRegion] = useState("us-east-1");
   const [newProjSize, setNewProjSize] = useState("NANO");
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+
+  // New Team Member Dialog State
+  const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
+  const [newTeamName, setNewTeamName] = useState("");
+  const [newTeamEmail, setNewTeamEmail] = useState("");
+  const [newTeamGithub, setNewTeamGithub] = useState("");
+  const [newTeamRole, setNewTeamRole] = useState("Developer");
+  const [isCreatingTeam, setIsCreatingTeam] = useState(false);
 
   // Live Telemetry Logs State
   const [logs, setLogs] = useState<SystemEvent[]>([]);
@@ -606,6 +622,45 @@ export default function Home() {
     }
   };
 
+  // Create new team member
+  const handleCreateTeamSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTeamName.trim() || !newTeamEmail.trim()) {
+      toast.error("Please fill in all required fields.");
+      return;
+    }
+
+    try {
+      setIsCreatingTeam(true);
+      const res = await fetch("/api/team", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newTeamName.trim(),
+          email_address: newTeamEmail.trim(),
+          github_username: newTeamGithub.trim() || null,
+          role: newTeamRole.trim() || "Developer"
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(`Team member '${newTeamName}' registered in Supabase!`);
+        setIsNewTeamOpen(false);
+        setNewTeamName("");
+        setNewTeamEmail("");
+        setNewTeamGithub("");
+        setNewTeamRole("Developer");
+        fetchTeam();
+      } else {
+        toast.error(data.error || "Failed to create team member.");
+      }
+    } catch (err) {
+      toast.error("Network error creating team member.");
+    } finally {
+      setIsCreatingTeam(false);
+    }
+  };
+
   // Switch selected active project
   const handleSelectProject = (p: any) => {
     setSelectedProjectId(p.project_id);
@@ -890,7 +945,7 @@ export default function Home() {
   // =========================================================================
   if (viewMode === "landing") {
     return (
-      <div className="min-h-screen bg-[#fafbfa] text-slate-800 font-sans flex flex-col justify-between selection:bg-[#3ecf8e]/20 select-none">
+      <div className="min-h-screen bg-[#fafbfa] text-slate-800 font-sans flex flex-col justify-between selection:bg-[#3ecf8e]/20">
         
         {/* Navigation */}
         <header className="h-16 border-b border-slate-200/60 px-6 md:px-12 flex items-center justify-between bg-white/80 backdrop-blur sticky top-0 z-30 shadow-sm">
@@ -1081,8 +1136,8 @@ export default function Home() {
                   <h4 className="text-xs font-bold text-slate-900">Sprint Daily Standup Remediation</h4>
                 </div>
                 <ol className="list-decimal list-inside text-xs text-slate-500 space-y-1.5 leading-relaxed">
-                  <li>Navigate to the **AEL Co-Pilot Chat** console tab.</li>
-                  <li>Type or select: <code className="bg-slate-100 px-1 py-0.5 rounded text-[#c2410c] text-[10px] font-mono">Give me a status update on the team</code>.</li>
+                  <li>Navigate to the <strong className="font-semibold text-slate-950">AEL Co-Pilot Chat</strong> console tab.</li>
+                  <li>Type or click to auto-run: <code onClick={() => handlePromptClick("Give me a status update on the team")} className="bg-orange-50 hover:bg-orange-100 border border-orange-200 px-1.5 py-0.5 rounded text-[#c2410c] text-[10px] font-mono cursor-pointer transition-colors" title="Click to copy and switch to chat">Give me a status update on the team</code>.</li>
                   <li>Verify the agent summarizes completed vs pending sprint tasks from the database and highlights overdue items automatically.</li>
                 </ol>
               </div>
@@ -1093,8 +1148,8 @@ export default function Home() {
                   <h4 className="text-xs font-bold text-slate-900">Incident Remediation & Workload Override</h4>
                 </div>
                 <ol className="list-decimal list-inside text-xs text-slate-500 space-y-1.5 leading-relaxed">
-                  <li>Click **Mock Server Crash** in the header to register a fresh stack trace in Supabase.</li>
-                  <li>Go to **AEL Co-Pilot Chat** and type: <code className="bg-slate-100 px-1 py-0.5 rounded text-[#c2410c] text-[10px] font-mono">Investigate the latest crash</code>.</li>
+                  <li>Click <strong className="font-semibold text-slate-950">Mock Server Crash</strong> in the header to register a fresh stack trace in Supabase.</li>
+                  <li>Go to <strong className="font-semibold text-slate-950">AEL Co-Pilot Chat</strong> and click to auto-run: <code onClick={() => handlePromptClick("Investigate the latest crash")} className="bg-orange-50 hover:bg-orange-100 border border-orange-200 px-1.5 py-0.5 rounded text-[#c2410c] text-[10px] font-mono cursor-pointer transition-colors" title="Click to copy and switch to chat">Investigate the latest crash</code>.</li>
                   <li>Verify AEL fetches the log, reviews latest commits, flags a developer workload overload, and requests approval before booking.</li>
                 </ol>
               </div>
@@ -1131,7 +1186,7 @@ export default function Home() {
   // RENDERING WORKSPACE APPLICATION
   // =========================================================================
   return (
-    <div className="light select-none">
+    <div className="light">
       <div className="flex h-screen bg-[#fcfcfc] text-[#1c1c1c] font-sans antialiased overflow-hidden">
         
         {/* ========================================================================= */}
@@ -1284,7 +1339,7 @@ export default function Home() {
         {/* ========================================================================= */}
         {/* 2. MAIN CONTAINER: HEADER, WORKSPACE, FOOTER                              */}
         {/* ========================================================================= */}
-        <div className="flex-1 flex flex-col min-w-0 bg-[#fcfcfc] relative">
+        <div className="flex-1 flex flex-col min-h-0 min-w-0 bg-[#fcfcfc] relative">
 
 
           {/* Top Header Bar */}
@@ -1332,11 +1387,12 @@ export default function Home() {
           {/* ========================================================================= */}
           {/* 3. CORE WORKSPACE: PROJECTS, CHAT, TEAM, SETTINGS, ETC                    */}
           {/* ========================================================================= */}
-          <main className="flex-1 flex flex-col min-h-0 p-6 relative bg-[#f9fafb]">
+          <main className={`flex-1 flex flex-col min-h-0 p-6 relative bg-[#f9fafb] ${activeTab === "chat" ? "overflow-hidden" : "overflow-y-auto"}`}>
+            {/* Custom scroll support applied dynamically */}
             
             {/* PROJECTS TAB */}
             {activeTab === "projects" && (
-              <div className="flex-1 min-h-0 flex flex-col space-y-6 overflow-y-auto pr-1">
+              <div className="flex flex-col space-y-6 pr-1">
                 
                 {/* Header Filter Panel */}
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-4 border border-[#e5e7eb] rounded-lg shadow-sm shrink-0">
@@ -1830,13 +1886,27 @@ export default function Home() {
                           messages.map((m, idx) => (
                             <div
                               key={idx}
-                              className={`flex flex-col ${
+                              className={`flex flex-col group relative ${
                                 m.role === "user" ? "items-end" : "items-start"
                               }`}
                             >
-                              <span className="text-[9px] text-[#6b7280] font-semibold mb-0.5">
-                                {m.role === "user" ? "Developer Override" : "Autonomous Lead"}
-                              </span>
+                              <div className="flex items-center gap-1.5 mb-0.5">
+                                <span className="text-[9px] text-[#6b7280] font-semibold">
+                                  {m.role === "user" ? "Developer Override" : "Autonomous Lead"}
+                                </span>
+                                <button
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(m.content);
+                                    toast.success("Message copied to clipboard!");
+                                  }}
+                                  className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 text-slate-400 hover:text-slate-600 rounded flex items-center justify-center"
+                                  title="Copy message text"
+                                >
+                                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                                  </svg>
+                                </button>
+                              </div>
                               <div
                                 className={`rounded-lg px-3.5 py-2.5 text-xs max-w-[85%] leading-relaxed ${
                                   m.role === "user"
@@ -2058,15 +2128,24 @@ export default function Home() {
 
             {/* TEAM TAB */}
             {activeTab === "team" && (
-              <div className="flex-1 min-h-0 flex flex-col space-y-5 bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm overflow-hidden">
+              <div className="flex flex-col space-y-5 bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm">
                 <div className="flex items-center justify-between">
                   <div>
                     <h2 className="text-sm font-bold text-slate-900">Corporate Team Directory</h2>
                     <p className="text-xs text-slate-500 mt-0.5">Click <strong>Assign to Project</strong> on any member to link them to an active project via the agent.</p>
                   </div>
+                  <Button
+                    onClick={() => setIsNewTeamOpen(true)}
+                    className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white text-xs font-bold px-3 py-1.5 h-auto rounded flex items-center gap-1.5 shadow-sm transition-all"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                    </svg>
+                    Add Team Member
+                  </Button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto">
+                <div>
                   {teamLoading ? (
                     <div className="flex flex-col items-center justify-center h-48 text-xs text-slate-400">
                       <div className="h-5 w-5 border-2 border-[#3ecf8e] border-t-transparent rounded-full animate-spin mb-2" />
@@ -2141,7 +2220,7 @@ export default function Home() {
 
             {/* INTEGRATIONS TAB */}
             {activeTab === "integrations" && (
-              <div className="flex-1 min-h-0 overflow-y-auto space-y-6">
+              <div className="space-y-6">
                 <div>
                   <h2 className="text-sm font-bold text-slate-900">Third-Party Integration Modules</h2>
                   <p className="text-xs text-slate-500 mt-0.5">Control live connectivity APIs linked to the AEL agent loop.</p>
@@ -2271,7 +2350,7 @@ export default function Home() {
 
             {/* USAGE TAB — REAL SUPABASE DATA */}
             {activeTab === "usage" && (
-              <div className="flex-1 min-h-0 overflow-y-auto space-y-5">
+              <div className="space-y-5">
                 {/* Header */}
                 <div className="bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm flex items-start justify-between">
                   <div>
@@ -2453,7 +2532,7 @@ export default function Home() {
 
             {/* ORGANIZATION SETTINGS TAB */}
             {activeTab === "settings" && (
-              <div className="flex-1 min-h-0 overflow-y-auto space-y-6">
+              <div className="space-y-6">
                 
                 {/* 1. Dynamic Model Selection Panel */}
                 <div className="bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm space-y-4">
@@ -2800,6 +2879,91 @@ export default function Home() {
                   disabled={isCreatingProject}
                 >
                   {isCreatingProject ? "Creating..." : "Register Project"}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 6. NEW TEAM MEMBER MODAL DIALOG                                           */}
+      {/* ========================================================================= */}
+      {isNewTeamOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white border border-[#e5e7eb] rounded-lg shadow-xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="p-4 border-b border-[#e5e7eb] flex items-center justify-between bg-slate-50">
+              <h3 className="font-bold text-slate-950 text-xs uppercase tracking-wider">Register New Team Member</h3>
+              <button 
+                onClick={() => setIsNewTeamOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 flex items-center justify-center"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateTeamSubmit} className="p-4 space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold text-slate-400 uppercase">Full Name</label>
+                <Input
+                  required
+                  placeholder="e.g. John Doe"
+                  value={newTeamName}
+                  onChange={(e) => setNewTeamName(e.target.value)}
+                  className="bg-white border-[#e5e7eb] text-xs h-9 rounded text-black font-semibold"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold text-slate-400 uppercase">Email Address</label>
+                <Input
+                  required
+                  type="email"
+                  placeholder="e.g. john.doe@company.com"
+                  value={newTeamEmail}
+                  onChange={(e) => setNewTeamEmail(e.target.value)}
+                  className="bg-white border-[#e5e7eb] text-xs h-9 rounded text-black font-semibold"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold text-slate-400 uppercase">GitHub Username</label>
+                <Input
+                  placeholder="e.g. johndoe-dev"
+                  value={newTeamGithub}
+                  onChange={(e) => setNewTeamGithub(e.target.value)}
+                  className="bg-white border-[#e5e7eb] text-xs h-9 rounded text-black font-mono"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold text-slate-400 uppercase">Role / Title</label>
+                <Input
+                  placeholder="e.g. Senior SRE, Backend Developer"
+                  value={newTeamRole}
+                  onChange={(e) => setNewTeamRole(e.target.value)}
+                  className="bg-white border-[#e5e7eb] text-xs h-9 rounded text-black font-semibold"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2 justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setIsNewTeamOpen(false)}
+                  className="border-[#e5e7eb] text-xs h-9 font-semibold text-slate-700 bg-white hover:bg-slate-50"
+                  disabled={isCreatingTeam}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white text-xs h-9 font-bold px-4"
+                  disabled={isCreatingTeam}
+                >
+                  {isCreatingTeam ? "Creating..." : "Add Member"}
                 </Button>
               </div>
             </form>
