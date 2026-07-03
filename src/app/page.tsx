@@ -203,6 +203,18 @@ export default function Home() {
     fetchGitHubRepos();
 
     if (typeof window !== "undefined") {
+      // Check for Google OAuth callback parameters
+      const urlParams = new URLSearchParams(window.location.search);
+      const oauthStatus = urlParams.get("oauth");
+      if (oauthStatus === "success") {
+        toast.success("Google OAuth Refresh Token updated automatically in .env.local!");
+        window.history.replaceState({}, document.title, window.location.pathname);
+      } else if (oauthStatus === "error") {
+        const msg = urlParams.get("message") || "Authorization failed.";
+        toast.error(`Google OAuth Failed: ${msg}`);
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+
       // Restore selected model
       const savedModel = localStorage.getItem("ael_selected_model");
       if (savedModel) setSelectedModel(savedModel);
@@ -651,6 +663,23 @@ export default function Home() {
         WARN
       </span>
     );
+  };
+
+  // Render markdown-like text as formatted HTML (no external dep)
+  const renderMarkdown = (text: string): string => {
+    return text
+      // Bold
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      // Italic
+      .replace(/\*(.+?)\*/g, "<em>$1</em>")
+      // Inline code
+      .replace(/`(.+?)`/g, "<code class='bg-slate-100 text-slate-700 px-1 rounded font-mono text-[10px]'>$1</code>")
+      // Bullet lines: lines that start with '  - ' or '- '
+      .replace(/^[ ]*- (.+)$/gm, "<li class='ml-4 list-disc leading-relaxed'>$1</li>")
+      // Wrap consecutive <li> in <ul>
+      .replace(/(<li[^>]*>.*<\/li>\n?)+/g, (m) => `<ul class='space-y-0.5 my-1'>${m}</ul>`)
+      // Newlines to <br> (not inside list items)
+      .replace(/\n(?!<\/?(ul|li))/g, "<br />");
   };
 
   // Filter and sort projects
@@ -1436,13 +1465,20 @@ export default function Home() {
                                 {m.role === "user" ? "Developer Override" : "Autonomous Lead"}
                               </span>
                               <div
-                                className={`rounded-lg px-3.5 py-2 text-xs max-w-[85%] leading-relaxed ${
+                                className={`rounded-lg px-3.5 py-2.5 text-xs max-w-[85%] leading-relaxed ${
                                   m.role === "user"
                                     ? "bg-white text-[#111827] border border-[#e5e7eb] shadow-sm"
                                     : "bg-[#f9fafb] text-[#374151] border border-[#e5e7eb]"
-                                  }`}
+                                }`}
                               >
-                                <span className="whitespace-pre-wrap font-mono">{m.content}</span>
+                                {m.role === "assistant" ? (
+                                  <div
+                                    className="prose-sm"
+                                    dangerouslySetInnerHTML={{ __html: renderMarkdown(m.content) }}
+                                  />
+                                ) : (
+                                  <span>{m.content}</span>
+                                )}
                               </div>
                             </div>
                           ))
@@ -1615,23 +1651,23 @@ export default function Home() {
                     </div>
                   )}
 
-                  {/* Chat Input Form */}
+                  {/* Chat Input Form — always enabled; free-text resumes the agent graph */}
                   <form onSubmit={handleSendMessage} className="border-t border-[#e5e7eb] p-3 bg-white flex gap-2">
                     <Input
                       value={inputMessage}
                       onChange={(e) => setInputMessage(e.target.value)}
                       placeholder={
-                        interruptionReason 
-                          ? "Workflow interrupted. Take action inside the console..."
-                          : "Type here to communicate with the SRE graph..."
+                        interruptionReason
+                          ? "Reply to continue the workflow (or click a button above)..."
+                          : "Ask AEL to schedule a meeting, update a task, investigate a crash..."
                       }
                       className="bg-white border-[#e5e7eb] text-xs h-9 flex-1 focus-visible:ring-[#3ecf8e] rounded text-black"
-                      disabled={sendingMessage || interruptionReason !== null}
+                      disabled={sendingMessage}
                     />
                     <Button
                       type="submit"
                       className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white font-bold text-xs h-9 px-4 rounded shadow-sm"
-                      disabled={sendingMessage || interruptionReason !== null || !inputMessage.trim()}
+                      disabled={sendingMessage || !inputMessage.trim()}
                     >
                       Send
                     </Button>
@@ -1644,9 +1680,11 @@ export default function Home() {
             {/* TEAM TAB */}
             {activeTab === "team" && (
               <div className="h-full flex flex-col space-y-5 bg-white border border-[#e5e7eb] rounded-lg p-5 shadow-sm overflow-hidden">
-                <div>
-                  <h2 className="text-sm font-bold text-slate-900">Corporate Team Directory</h2>
-                  <p className="text-xs text-slate-500 mt-0.5">Corporate team members registered in the registry database.</p>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-sm font-bold text-slate-900">Corporate Team Directory</h2>
+                    <p className="text-xs text-slate-500 mt-0.5">Click <strong>Assign to Project</strong> on any member to link them to an active project via the agent.</p>
+                  </div>
                 </div>
 
                 <div className="flex-1 overflow-y-auto">
@@ -1667,6 +1705,7 @@ export default function Home() {
                             <TableHead className="text-xs font-bold text-slate-700">GitHub Username</TableHead>
                             <TableHead className="text-xs font-bold text-slate-700">Role</TableHead>
                             <TableHead className="text-xs font-bold text-slate-700">Status</TableHead>
+                            <TableHead className="text-xs font-bold text-slate-700">Actions</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -1680,6 +1719,36 @@ export default function Home() {
                                 <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
                                   Registry Synced
                                 </span>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-2">
+                                  {/* Assign to Project via chat */}
+                                  <button
+                                    onClick={() => {
+                                      const repoName = localStorage.getItem("ael_selected_repo_name") || "[select a project in Settings]";
+                                      setActiveTab("chat");
+                                      setTimeout(() => {
+                                        const prompt = `Assign ${member.name} (${member.email_address}) to the project ${repoName}`;
+                                        triggerAgentMessage(prompt);
+                                      }, 200);
+                                    }}
+                                    className="text-[10px] px-2 py-1 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 font-semibold transition-colors"
+                                  >
+                                    + Assign to Project
+                                  </button>
+                                  {/* Schedule sync via chat */}
+                                  <button
+                                    onClick={() => {
+                                      setActiveTab("chat");
+                                      setTimeout(() => {
+                                        triggerAgentMessage(`Schedule a follow-up sync meeting with ${member.name} at ${member.email_address} for overdue task review`);
+                                      }, 200);
+                                    }}
+                                    className="text-[10px] px-2 py-1 rounded bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100 font-semibold transition-colors"
+                                  >
+                                    📅 Schedule Sync
+                                  </button>
+                                </div>
                               </TableCell>
                             </TableRow>
                           ))}
