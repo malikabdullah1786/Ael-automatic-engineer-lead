@@ -1,8 +1,33 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# =============================================================================
+# AEL AGENT PROJECT — .gitignore
+# =============================================================================
+# This file ensures no secrets, build output, or developer-specific junk
+# is ever pushed to the shared repository.
+# =============================================================================
 
-# dependencies
-/node_modules
-/.pnp
+# -----------------------------------------------------------------------------
+# 1. SECRETS & ENVIRONMENT VARIABLES
+#    Never commit .env files — all keys live in .env.local on each developer's
+#    machine. The .env.local.example file is safe and intentionally included.
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.local.example
+
+# -----------------------------------------------------------------------------
+# 2. NEXT.JS BUILD OUTPUT
+# -----------------------------------------------------------------------------
+/.next/
+/out/
+/build/
+.next
+
+# -----------------------------------------------------------------------------
+# 3. NODE DEPENDENCIES
+#    node_modules should be reproduced from package.json via `npm install`.
+# -----------------------------------------------------------------------------
+/node_modules/
+.pnp
 .pnp.*
 .yarn/*
 !.yarn/patches
@@ -10,32 +35,96 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
-/coverage
+# -----------------------------------------------------------------------------
+# 4. TYPESCRIPT COMPILATION CACHE
+#    tsbuildinfo is a local incremental compilation cache, not source code.
+# -----------------------------------------------------------------------------
+*.tsbuildinfo
+next-env.d.ts
 
-# next.js
-/.next/
-/out/
+# -----------------------------------------------------------------------------
+# 5. PACKAGE MANAGER LOCK FILES (keep only package-lock.json)
+#    Exclude yarn and pnpm lock files to avoid conflicts.
+# -----------------------------------------------------------------------------
+yarn.lock
+pnpm-lock.yaml
 
-# production
-/build
+# -----------------------------------------------------------------------------
+# 6. TEST & COVERAGE OUTPUT
+# -----------------------------------------------------------------------------
+/coverage/
+*.lcov
+.nyc_output/
 
-# misc
-.DS_Store
-*.pem
+# -----------------------------------------------------------------------------
+# 7. SCRATCH / THROWAWAY SCRIPTS
+#    The /scratch directory contains temporary one-off debugging scripts that
+#    are not part of the production codebase.
+# -----------------------------------------------------------------------------
+/scratch/
 
-# debug
+# -----------------------------------------------------------------------------
+# 8. LOG FILES
+# -----------------------------------------------------------------------------
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+*.log
+logs/
 
-# env files (can opt-in for committing if needed)
-.env*
+# -----------------------------------------------------------------------------
+# 9. OS & SYSTEM JUNK
+# -----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
 
-# vercel
-.vercel
+# -----------------------------------------------------------------------------
+# 10. EDITOR & IDE CONFIGURATION
+#     Each developer uses their own editor — don't commit editor preferences.
+# -----------------------------------------------------------------------------
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+*.swo
 
-# typescript
-*.tsbuildinfo
-next-env.d.ts
+# -----------------------------------------------------------------------------
+# 11. VERCEL DEPLOYMENT METADATA
+# -----------------------------------------------------------------------------
+.vercel/
+
+# -----------------------------------------------------------------------------
+# 12. SSL / CERTIFICATES
+# -----------------------------------------------------------------------------
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+*.pfx
+
+# -----------------------------------------------------------------------------
+# 13. DEBUG & PROFILING
+# -----------------------------------------------------------------------------
+.clinic/
+*.heapsnapshot
+*.cpuprofile
+
+# -----------------------------------------------------------------------------
+# 14. MISC TEMP FILES
+# -----------------------------------------------------------------------------
+*.tmp
+*.temp
+*.bak
+*.orig
+.cache/
+dist/
