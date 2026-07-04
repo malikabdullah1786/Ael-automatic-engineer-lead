@@ -3214,7 +3214,7 @@ export default function Home() {
                 <div className="flex items-center justify-between">
                   <div>
                     <h2 className="text-sm font-bold text-slate-900">Corporate Team Directory</h2>
-                    <p className="text-xs text-slate-500 mt-0.5">Click <strong>Assign to Project</strong> on any member to link them to an active project via the agent.</p>
+                    <p className="text-xs text-slate-500 mt-0.5">Manage team members, update registration settings, or schedule incident/remediation meetings.</p>
                   </div>
                   <Button
                     onClick={() => setIsNewTeamOpen(true)}
@@ -3268,20 +3268,6 @@ export default function Home() {
                                     className="text-[10px] px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 font-semibold transition-colors"
                                   >
                                     Remove
-                                  </button>
-                                  {/* Assign to Project via chat */}
-                                  <button
-                                    onClick={() => {
-                                      const repoName = localStorage.getItem("ael_selected_repo_name") || "[select a project in Settings]";
-                                      switchTab("chat");
-                                      setTimeout(() => {
-                                        const prompt = `Assign ${member.name} (${member.email_address}) to the project ${repoName}`;
-                                        triggerAgentMessage(prompt);
-                                      }, 200);
-                                    }}
-                                    className="text-[10px] px-2 py-1 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 font-semibold transition-colors"
-                                  >
-                                    + Assign to Project
                                   </button>
                                   {/* Schedule sync via chat */}
                                   <button

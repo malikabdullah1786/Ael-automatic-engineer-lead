@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MemorySaver } from "@langchain/langgraph";
 import { aelGraph } from "@/lib/agent";
+import { supabase } from "@/lib/supabase";
 import fs from "fs";
 import path from "path";
 
@@ -113,71 +114,83 @@ function deserializeWrites(writes: any) {
   return result;
 }
 
-// Define a file-backed checkpointer to persist checkpoints across hot-reloads and restarts
-class FileCheckpointer extends MemorySaver {
-  filePath: string;
-
-  constructor(filePath: string) {
-    super();
-    this.filePath = filePath;
-    this.load();
-  }
-
-  load() {
+// Define a Supabase-backed checkpointer to persist checkpoints across serverless lambda instances
+class SupabaseCheckpointer extends MemorySaver {
+  async loadFromSupabase() {
     try {
-      if (fs.existsSync(this.filePath)) {
-        const fileContent = fs.readFileSync(this.filePath, "utf8");
-        if (fileContent.trim()) {
-          const data = JSON.parse(fileContent);
-          this.storage = deserializeStorage(data.storage) || Object.create(null);
-          this.writes = deserializeWrites(data.writes) || Object.create(null);
-          console.log(`[FileCheckpointer] Successfully loaded checkpoints from ${this.filePath}`);
+      const { data, error } = await supabase
+        .from("system_settings")
+        .select("value")
+        .eq("key", "agent_checkpoints")
+        .single();
+      
+      if (error) {
+        if (error.code === "PGRST116") {
+          this.storage = Object.create(null);
+          this.writes = Object.create(null);
+          console.log("[SupabaseCheckpointer] No checkpoints found in database, initialized empty storage.");
+        } else {
+          console.error("[SupabaseCheckpointer] Failed to load checkpoints from Supabase:", error);
         }
+        return;
+      }
+
+      if (data && data.value) {
+        const payload = data.value as any;
+        this.storage = deserializeStorage(payload.storage) || Object.create(null);
+        this.writes = deserializeWrites(payload.writes) || Object.create(null);
+        console.log("[SupabaseCheckpointer] Successfully loaded checkpoints from Supabase.");
       }
     } catch (err) {
-      console.error("[FileCheckpointer] Failed to load checkpoints:", err);
+      console.error("[SupabaseCheckpointer] Exception loading checkpoints from Supabase:", err);
     }
   }
 
-  save() {
+  async saveToSupabase() {
     try {
-      const dir = path.dirname(this.filePath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      
       const serializedStorage = serializeStorage(this.storage);
       const serializedWrites = serializeWrites(this.writes);
-      
-      fs.writeFileSync(
-        this.filePath,
-        JSON.stringify({ storage: serializedStorage, writes: serializedWrites }, null, 2),
-        "utf8"
-      );
+
+      const { error } = await supabase
+        .from("system_settings")
+        .upsert({
+          key: "agent_checkpoints",
+          value: {
+            storage: serializedStorage,
+            writes: serializedWrites
+          },
+          updated_at: new Date().toISOString()
+        });
+
+      if (error) {
+        console.error("[SupabaseCheckpointer] Failed to save checkpoints to Supabase:", error);
+      } else {
+        console.log("[SupabaseCheckpointer] Successfully saved checkpoints to Supabase.");
+      }
     } catch (err) {
-      console.error("[FileCheckpointer] Failed to save checkpoints:", err);
+      console.error("[SupabaseCheckpointer] Exception saving checkpoints to Supabase:", err);
     }
   }
 
   async put(config: any, checkpoint: any, metadata: any) {
     const res = await super.put(config, checkpoint, metadata);
-    this.save();
+    await this.saveToSupabase();
     return res;
   }
 
   async putWrites(config: any, writes: any, taskId: any) {
     const res = await super.putWrites(config, writes, taskId);
-    this.save();
+    await this.saveToSupabase();
     return res;
   }
 
   async deleteThread(threadId: string) {
     await super.deleteThread(threadId);
-    this.save();
+    await this.saveToSupabase();
   }
 }
 
-const checkpointer = new FileCheckpointer("C:\\Users\\malik\\.gemini\\antigravity\\ael_checkpoints.json");
+const checkpointer = new SupabaseCheckpointer();
 const graph = aelGraph.compile({ checkpointer });
 
 export async function POST(req: NextRequest) {
@@ -187,6 +200,9 @@ export async function POST(req: NextRequest) {
     if (!threadId) {
       return NextResponse.json({ error: "Missing threadId parameter." }, { status: 400 });
     }
+
+    // Load checkpoints from Supabase before executing the graph
+    await checkpointer.loadFromSupabase();
 
     const config = {
       configurable: {
