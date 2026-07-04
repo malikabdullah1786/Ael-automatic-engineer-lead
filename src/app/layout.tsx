@@ -17,6 +17,15 @@ export const metadata: Metadata = {
   title: "AEL Agent — Autonomous Engineering Lead",
   description:
     "Enterprise-grade autonomous SRE agent. Monitors Supabase telemetry, triages crashes via GitHub commits, runs daily standups, and coordinates team remediation via Google Calendar.",
+  icons: {
+    icon: [
+      { url: "/icon.png", type: "image/png", sizes: "512x512" },
+    ],
+    apple: [
+      { url: "/icon.png", type: "image/png", sizes: "512x512" },
+    ],
+    shortcut: "/icon.png",
+  },
 };
 
 export default function RootLayout({
