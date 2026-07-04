@@ -149,6 +149,7 @@ check_db.js
 #     Not production code — should not be committed.
 # -----------------------------------------------------------------------------
 /brain/
+DEMO_SCRIPT.md
 
 # -----------------------------------------------------------------------------
 # 17. TYPESCRIPT BUILD CACHE

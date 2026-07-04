@@ -222,6 +222,8 @@ export default function Home() {
   // Sidebar — starts closed; a media-query useEffect will open it on desktop
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
+  // Chat session panel visibility on mobile (toggle to show/hide history)
+  const [isChatSessionPanelOpen, setIsChatSessionPanelOpen] = useState(false);
 
   const [inputMessage, setInputMessage] = useState("");
   const [sendingMessage, setSendingMessage] = useState(false);
@@ -265,10 +267,7 @@ export default function Home() {
         window.history.replaceState({}, document.title, window.location.pathname);
       }
 
-      // Restore view mode (so Restart stays on the app screen)
-      const savedViewMode = localStorage.getItem("ael_view_mode");
-      if (savedViewMode === "app") setViewMode("app");
-      if (savedViewMode === "architecture") setViewMode("architecture");
+      // Always start on the landing/home screen — do NOT restore the last view mode
 
       // Restore active tab
       const savedTab = localStorage.getItem("ael_active_tab");
@@ -1209,7 +1208,8 @@ export default function Home() {
               </svg>
             </div>
             <div>
-              <span className="font-bold text-slate-900 tracking-tight text-base">AEL Autonomous Engineering Lead</span>
+              <span className="font-bold text-slate-900 tracking-tight text-base hidden sm:inline">AEL Autonomous Engineering Lead</span>
+              <span className="font-bold text-slate-900 tracking-tight text-base sm:hidden">AEL</span>
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -1967,7 +1967,7 @@ export default function Home() {
         {/* 2. MAIN CONTAINER: HEADER, WORKSPACE, FOOTER                              */}
         {/* ========================================================================= */}
         <div
-          className="flex flex-col min-h-0 min-w-0 bg-[#fcfcfc] relative transition-all duration-300 overflow-hidden"
+          className="flex flex-col flex-1 min-h-0 min-w-0 bg-[#fcfcfc] relative transition-all duration-300 overflow-hidden"
           style={{
             // On mobile: sidebar overlays content — no shift needed, always full width
             // On desktop: sidebar is fixed in-flow equivalent — shift content right
@@ -2559,42 +2559,50 @@ export default function Home() {
 
             {/* CO-PILOT CHAT CONSOLE TAB */}
             {activeTab === "chat" && (
-              <div className="flex-1 min-h-0 flex flex-col sm:flex-row gap-3 sm:gap-4 overflow-hidden min-w-0">
-                
-                {/* Chat Session History Left Column (Gemini Style) */}
-                <div className="w-full sm:w-52 md:w-56 bg-white border border-[#e5e7eb] rounded-lg flex flex-col overflow-hidden shrink-0 shadow-sm max-h-40 sm:max-h-none">
-                  {/* New Chat Button */}
-                  <div className="p-3 border-b border-[#e5e7eb]">
-                    <Button
-                      onClick={() => handleStartNewChat()}
-                      className="w-full bg-[#3ecf8e] hover:bg-[#34b27b] text-white font-bold text-xs h-9 rounded flex items-center justify-center gap-1.5 shadow-sm transition-all"
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                      </svg>
-                      New Chat
-                    </Button>
-                  </div>
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden min-w-0">
 
-                  {/* Sessions Scroll Area */}
-                  <div className="flex-1 min-h-0 py-2 flex flex-col">
-                    <ScrollArea className="flex-1 min-h-0">
+                {/* ===== MOBILE: Thin top bar with New Chat + session toggle ===== */}
+                <div className="sm:hidden flex items-center gap-2 mb-2 shrink-0">
+                  <Button
+                    onClick={() => handleStartNewChat()}
+                    className="flex-1 bg-[#3ecf8e] hover:bg-[#34b27b] text-white font-bold text-xs h-9 rounded flex items-center justify-center gap-1.5 shadow-sm transition-all"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                    </svg>
+                    New Chat
+                  </Button>
+                  <button
+                    onClick={() => setIsChatSessionPanelOpen(prev => !prev)}
+                    className="h-9 px-3 border border-[#e5e7eb] rounded bg-white text-[#6b7280] hover:bg-slate-50 text-xs font-medium flex items-center gap-1.5 shrink-0"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                    </svg>
+                    {sessions.length > 0 ? `${sessions.length} chats` : 'History'}
+                  </button>
+                </div>
+
+                {/* ===== MOBILE: Collapsible session history panel ===== */}
+                {isChatSessionPanelOpen && (
+                  <div className="sm:hidden mb-2 bg-white border border-[#e5e7eb] rounded-lg overflow-hidden shrink-0 shadow-sm" style={{maxHeight: '160px'}}>
+                    <div className="flex-1 min-h-0 py-1 overflow-y-auto" style={{maxHeight: '160px'}}>
                       {sessions.length === 0 ? (
-                        <p className="text-[10px] text-[#8c8c8c] text-center mt-5">No active sessions</p>
+                        <p className="text-[10px] text-[#8c8c8c] text-center py-4">No active sessions</p>
                       ) : (
-                        <div className="px-2 space-y-1">
+                        <div className="px-2 py-1 space-y-0.5">
                           {sessions.map((s) => (
                             <div
                               key={s.threadId}
-                              onClick={() => handleSwitchSession(s.threadId)}
-                              className={`group w-full flex items-center justify-between px-2.5 py-2 rounded text-xs font-medium cursor-pointer transition-all ${
+                              onClick={() => { handleSwitchSession(s.threadId); setIsChatSessionPanelOpen(false); }}
+                              className={`group w-full flex items-center justify-between px-2.5 py-1.5 rounded text-xs font-medium cursor-pointer transition-all ${
                                 s.threadId === threadId
                                   ? "bg-[#f3f4f6] text-[#111827] font-bold"
                                   : "text-[#6b7280] hover:bg-[#f9fafb] hover:text-[#111827]"
                               }`}
                             >
                               <div className="flex items-center gap-2 truncate">
-                                <svg className="w-3.5 h-3.5 text-[#8c8c8c] group-hover:text-[#3ecf8e] transition-colors shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                <svg className="w-3 h-3 text-[#8c8c8c] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                   <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                                 </svg>
                                 <span className="truncate pr-1 text-[11px]">{s.title}</span>
@@ -2602,22 +2610,76 @@ export default function Home() {
                               <button
                                 onClick={(e) => handleDeleteSession(s.threadId, e)}
                                 className="opacity-0 group-hover:opacity-100 text-[#8c8c8c] hover:text-red-500 p-0.5 rounded transition-opacity"
-                                title="Delete Chat"
                               >
                                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                                 </svg>
                               </button>
                             </div>
                           ))}
                         </div>
                       )}
-                    </ScrollArea>
+                    </div>
                   </div>
-                </div>
+                )}
 
-                {/* Active Chat Dialogue Panel */}
-                <div className="shiny-card flex-1 bg-white border border-[#e5e7eb] rounded-lg overflow-hidden flex flex-col shadow-sm min-w-0">
+                {/* ===== DESKTOP: Side-by-side layout ===== */}
+                <div className="flex-1 min-h-0 hidden sm:flex sm:flex-row gap-4 overflow-hidden min-w-0">
+
+                  {/* Desktop session column */}
+                  <div className="w-52 md:w-56 bg-white border border-[#e5e7eb] rounded-lg flex flex-col overflow-hidden shrink-0 shadow-sm h-full">
+                    <div className="p-3 border-b border-[#e5e7eb]">
+                      <Button
+                        onClick={() => handleStartNewChat()}
+                        className="w-full bg-[#3ecf8e] hover:bg-[#34b27b] text-white font-bold text-xs h-9 rounded flex items-center justify-center gap-1.5 shadow-sm transition-all"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                        </svg>
+                        New Chat
+                      </Button>
+                    </div>
+                    <div className="flex-1 min-h-0 py-2 flex flex-col">
+                      <ScrollArea className="flex-1 min-h-0">
+                        {sessions.length === 0 ? (
+                          <p className="text-[10px] text-[#8c8c8c] text-center mt-5">No active sessions</p>
+                        ) : (
+                          <div className="px-2 space-y-1">
+                            {sessions.map((s) => (
+                              <div
+                                key={s.threadId}
+                                onClick={() => handleSwitchSession(s.threadId)}
+                                className={`group w-full flex items-center justify-between px-2.5 py-2 rounded text-xs font-medium cursor-pointer transition-all ${
+                                  s.threadId === threadId
+                                    ? "bg-[#f3f4f6] text-[#111827] font-bold"
+                                    : "text-[#6b7280] hover:bg-[#f9fafb] hover:text-[#111827]"
+                                }`}
+                              >
+                                <div className="flex items-center gap-2 truncate">
+                                  <svg className="w-3.5 h-3.5 text-[#8c8c8c] group-hover:text-[#3ecf8e] transition-colors shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                                  </svg>
+                                  <span className="truncate pr-1 text-[11px]">{s.title}</span>
+                                </div>
+                                <button
+                                  onClick={(e) => handleDeleteSession(s.threadId, e)}
+                                  className="opacity-0 group-hover:opacity-100 text-[#8c8c8c] hover:text-red-500 p-0.5 rounded transition-opacity"
+                                  title="Delete Chat"
+                                >
+                                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                  </svg>
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </ScrollArea>
+                    </div>
+                  </div>
+
+                  {/* Desktop Active Chat Dialogue Panel */}
+                  <div className="shiny-card flex-1 bg-white border border-[#e5e7eb] rounded-lg overflow-hidden flex flex-col shadow-sm min-w-0 h-full">
                   
                   {/* Panel Header */}
                   <div className="p-4 border-b border-[#e5e7eb] flex items-center justify-between bg-[#f9fafb]">
@@ -2636,7 +2698,7 @@ export default function Home() {
                   {/* Messages Stream */}
                   <div className="flex-1 min-h-0 overflow-hidden bg-[#fafbfa] min-w-0 flex flex-col">
                     <ScrollArea className="flex-1 min-h-0 w-full [&>[data-slot=scroll-area-viewport]]:overflow-x-hidden">
-                      <div className={`${isSidebarOpen ? 'max-w-5xl' : 'max-w-[1400px]'} mx-auto w-full px-4 md:px-8 py-6 space-y-6 flex flex-col transition-all duration-300`}>
+                      <div className="max-w-3xl mx-auto w-full px-4 md:px-6 py-6 space-y-6 flex flex-col">
                         {messages.length === 0 ? (
                           <div className="flex flex-col items-center w-full py-6 px-3">
                             {/* Header */}
@@ -2778,15 +2840,15 @@ export default function Home() {
 
                                 {/* Bubble */}
                                 <div
-                                  className={`rounded-2xl px-4 py-3 text-xs leading-relaxed break-words shadow-sm border min-w-0 overflow-hidden ${
+                                  className={`rounded-2xl px-4 py-3 text-xs leading-relaxed shadow-sm border min-w-0 overflow-hidden ${
                                     isUser
-                                      ? "w-fit max-w-[75%] bg-[#3ecf8e]/10 text-slate-850 border-[#3ecf8e]/20 self-end"
-                                      : "w-fit max-w-[85%] md:max-w-[75%] bg-white text-slate-700 border-slate-200/80 self-start"
+                                      ? "w-fit max-w-[75%] bg-[#3ecf8e]/10 text-slate-850 border-[#3ecf8e]/20 self-end break-words"
+                                      : "w-full bg-white text-slate-700 border-slate-200/80 self-start break-words"
                                   }`}
                                 >
                                   {m.role === "assistant" ? (
                                     <div
-                                      className="prose-sm prose-slate max-w-none prose-p:leading-relaxed prose-pre:bg-slate-50 prose-pre:border prose-pre:border-slate-100 prose-pre:text-slate-800 prose-pre:whitespace-pre-wrap prose-pre:break-words prose-pre:overflow-x-auto prose-table:block prose-table:overflow-x-auto prose-table:w-full w-full min-w-0"
+                                      className="prose-sm prose-slate max-w-none prose-p:leading-relaxed prose-pre:bg-slate-50 prose-pre:border prose-pre:border-slate-100 prose-pre:text-slate-800 prose-pre:whitespace-pre-wrap prose-pre:break-words prose-pre:overflow-x-auto prose-table:block prose-table:overflow-x-auto prose-table:w-full w-full min-w-0 overflow-x-auto"
                                       dangerouslySetInnerHTML={{ __html: renderMarkdown(m.content) }}
                                     />
                                   ) : (
@@ -3093,7 +3155,7 @@ export default function Home() {
                   {/* Suggestion Chips */}
                   {!interruptionReason && (
                     <div className="px-4 py-3 border-t border-[#e5e7eb] bg-[#f9fafb]">
-                      <div className={`${isSidebarOpen ? 'max-w-5xl' : 'max-w-[1400px]'} mx-auto w-full flex flex-wrap gap-2 justify-center sm:justify-start transition-all duration-300`}>
+                      <div className="max-w-3xl mx-auto w-full flex flex-wrap gap-2 justify-start">
                         <button
                           onClick={() => triggerAgentMessage("Give me a status update on the team")}
                           className="text-[10px] px-2.5 py-1.5 rounded-md bg-white hover:bg-[#f9fafb] border border-[#e5e7eb] text-[#374151] font-medium transition-colors cursor-pointer shadow-sm flex items-center gap-1.5"
@@ -3160,7 +3222,7 @@ export default function Home() {
 
                   {/* Chat Input Form — always enabled; free-text resumes the agent graph */}
                   <form onSubmit={handleSendMessage} className="border-t border-[#e5e7eb] py-4 px-4 md:px-8 bg-white flex flex-col gap-2">
-                    <div className={`${isSidebarOpen ? 'max-w-5xl' : 'max-w-[1400px]'} mx-auto w-full flex flex-col gap-2 transition-all duration-300`}>
+                    <div className="max-w-3xl mx-auto w-full flex flex-col gap-2">
                       {/* Cancel bar — shown whenever a workflow is in progress */}
                       {interruptionReason && (
                         <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded px-3 py-1.5">
@@ -3203,7 +3265,133 @@ export default function Home() {
                       </div>
                     </div>
                   </form>
-                </div>
+                  </div>{/* end desktop active chat dialogue */}
+
+                </div>{/* end desktop sm:flex wrapper */}
+
+                {/* ===== MOBILE: Full-screen chat panel ===== */}
+                <div className="sm:hidden flex-1 min-h-0 flex flex-col bg-white border border-[#e5e7eb] rounded-lg overflow-hidden shadow-sm">
+
+                  {/* Mobile Panel Header */}
+                  <div className="px-3 py-2.5 border-b border-[#e5e7eb] flex items-center justify-between bg-[#f9fafb] shrink-0">
+                    <div className="flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-[#3ecf8e] animate-pulse" />
+                      <h2 className="text-xs font-bold text-[#111827]">Console Stream</h2>
+                    </div>
+                    <span className="text-[9px] font-semibold bg-[#e8fbf2] text-[#047857] px-1.5 py-0.5 rounded border border-[#a7f3d0] truncate max-w-[130px]">
+                      {selectedModel.replace("models/", "")}
+                    </span>
+                  </div>
+
+                  {/* Mobile Messages */}
+                  <div className="flex-1 min-h-0 overflow-hidden bg-[#fafbfa] flex flex-col">
+                    <ScrollArea className="flex-1 min-h-0 w-full">
+                      <div className="w-full px-3 py-4 space-y-4 flex flex-col">
+                        {messages.length === 0 ? (
+                          <div className="flex flex-col items-center w-full py-4 px-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <div className="h-6 w-6 rounded-full bg-[#ecfdf5] border border-[#a7f3d0] flex items-center justify-center">
+                                <svg className="w-3.5 h-3.5 text-[#3ecf8e]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                                </svg>
+                              </div>
+                              <p className="text-sm font-bold text-[#111827]">AEL Co-Pilot</p>
+                            </div>
+                            <p className="text-[10px] text-[#6b7280] mb-4 text-center">Tap a chip or type to start.</p>
+                            <div className="grid grid-cols-2 gap-2 w-full">
+                              {[
+                                { label: "Sprint Standup", chip: "Give me a status update on the team" },
+                                { label: "Triage Crash", chip: "Investigate the latest crash" },
+                                { label: "Today's Summary", chip: "Show me a summary of today" },
+                                { label: "Weekly Summary", chip: "Show me a summary of this week" },
+                                { label: "Direct Email", chip: "Send a direct email to a team member" },
+                                { label: "Team Meeting", chip: "Schedule a team meeting" },
+                              ].map((f) => (
+                                <button
+                                  key={f.label}
+                                  onClick={() => triggerAgentMessage(f.chip)}
+                                  disabled={sendingMessage}
+                                  className="text-left p-2.5 rounded-lg border bg-white hover:shadow-md transition-all border-[#e5e7eb] hover:border-[#3ecf8e] text-[10px] font-semibold text-[#374151]"
+                                >
+                                  {f.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          messages.map((m, idx) => {
+                            const isUser = m.role === "user";
+                            return (
+                              <div key={idx} className={`flex flex-col ${isUser ? "items-end" : "items-start"} w-full`}>
+                                <span className="text-[10px] text-[#8c8c8c] font-semibold mb-1">
+                                  {isUser ? "You" : "AEL"}
+                                </span>
+                                <div className={`rounded-xl px-3 py-2.5 text-xs leading-relaxed break-words shadow-sm border overflow-hidden w-full max-w-full ${
+                                  isUser
+                                    ? "bg-[#3ecf8e]/10 text-slate-800 border-[#3ecf8e]/20"
+                                    : "bg-white text-slate-700 border-slate-200/80"
+                                }`}>
+                                  {m.role === "assistant" ? (
+                                    <div
+                                      className="prose-sm prose-slate max-w-none prose-p:leading-relaxed prose-pre:overflow-x-auto prose-table:block prose-table:overflow-x-auto prose-table:w-full w-full min-w-0 overflow-hidden"
+                                      dangerouslySetInnerHTML={{ __html: renderMarkdown(m.content) }}
+                                    />
+                                  ) : (
+                                    <span className="whitespace-pre-wrap break-words">{m.content}</span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                        {sendingMessage && (
+                          <div className="flex items-center gap-1.5 text-[#6b7280] text-[10px] font-mono">
+                            <span className="h-1 w-1 bg-[#3ecf8e] rounded-full animate-bounce" />
+                            <span className="h-1 w-1 bg-[#3ecf8e] rounded-full animate-bounce delay-75" />
+                            <span className="h-1 w-1 bg-[#3ecf8e] rounded-full animate-bounce delay-150" />
+                            AEL is processing...
+                          </div>
+                        )}
+                        <div ref={chatEndRef} />
+                      </div>
+                    </ScrollArea>
+                  </div>
+
+                  {/* Mobile HIL interruption banner */}
+                  {interruptionReason && (
+                    <div className={`px-3 py-2.5 border-t shrink-0 ${interruptionReason.startsWith("email_") ? "bg-emerald-50/40 border-emerald-200" : "bg-amber-50/50 border-amber-200"}`}>
+                      <p className={`text-[10px] font-bold mb-2 ${interruptionReason.startsWith("email_") ? "text-emerald-700" : "text-amber-700"}`}>
+                        {interruptionReason.startsWith("email_") ? "✉️ Email Co-Pilot" : "⚡ Action Required"}
+                      </p>
+                      {interruptionReason === "human_approval_required" && (
+                        <div className="flex gap-2">
+                          <Button onClick={() => handleApprovalDecision(true)} className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white text-xs h-8 flex-1 font-bold rounded">Approve</Button>
+                          <Button onClick={() => handleApprovalDecision(false)} variant="outline" className="text-red-600 text-xs h-8 flex-1 rounded bg-white border-[#e5e7eb]">Decline</Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Mobile Chat Input */}
+                  <form onSubmit={handleSendMessage} className="border-t border-[#e5e7eb] p-3 bg-white shrink-0">
+                    <div className="flex gap-2">
+                      <Input
+                        value={inputMessage}
+                        onChange={(e) => setInputMessage(e.target.value)}
+                        placeholder={interruptionReason ? "Reply or type 'exit'..." : "Ask AEL..."}
+                        className="bg-white border-[#e5e7eb] text-xs h-9 flex-1 focus-visible:ring-[#3ecf8e] rounded text-black"
+                        disabled={sendingMessage}
+                      />
+                      <Button
+                        type="submit"
+                        className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white font-bold text-xs h-9 px-4 rounded shadow-sm"
+                        disabled={sendingMessage || !inputMessage.trim()}
+                      >
+                        Send
+                      </Button>
+                    </div>
+                  </form>
+                </div>{/* end mobile full-screen chat panel */}
 
               </div>
             )}
@@ -3861,10 +4049,6 @@ export default function Home() {
               <span>AEL SRE Agent v1.5.0</span>
               <span className="h-1 w-1 rounded-full bg-slate-300 inline-block shrink-0" />
               <span className="font-mono bg-slate-100 text-slate-600 px-1 rounded">Active Model: {selectedModel.replace("models/", "")}</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-[#3ecf8e] animate-pulse" />
-              <span>Telemetry: Streaming</span>
             </div>
           </footer>
 
