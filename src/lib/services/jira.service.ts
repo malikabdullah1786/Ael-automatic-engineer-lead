@@ -80,7 +80,7 @@ export class JiraService implements IJiraService {
   }
 
   /**
-   * Finds a Jira user's account ID from their email.
+   * Finds a Jira user's account ID from their gmail.
    */
   private async findUserAccountId(host: string, authHeader: string, email: string): Promise<string | null> {
     try {
@@ -244,7 +244,7 @@ export class JiraService implements IJiraService {
 
     // Resolve user account ID
     const accountId = await this.findUserAccountId(resolved.host, authHeader, devEmail);
-    
+
     // Construct JQL
     // Filter by project and assignee. If account ID was not resolved, try searching by email directly in JQL.
     const assigneeFilter = accountId ? `assignee = "${accountId}"` : `assignee = "${devEmail}"`;
@@ -287,7 +287,7 @@ export class JiraService implements IJiraService {
 
         // Determine category
         const isCompleted = statusCategory === "done" || statusName === "done" || statusName === "resolved" || statusName === "closed";
-        
+
         if (isCompleted) {
           summary.completed.push(task);
         } else if (dueDateStr) {
