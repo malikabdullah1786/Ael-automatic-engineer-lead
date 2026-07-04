@@ -62,7 +62,8 @@ export async function GET() {
     const { count: overdueTasks, error: overdueErr } = await supabase
       .from("sprint_tasks")
       .select("*", { count: "exact", head: true })
-      .eq("status", "overdue");
+      .neq("status", "Completed")
+      .lt("due_date", new Date().toISOString());
 
     if (overdueErr) throw new Error(overdueErr.message);
 

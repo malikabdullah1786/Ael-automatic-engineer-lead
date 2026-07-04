@@ -81,6 +81,14 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* Design tokens for the card system */
+  --card-shine-color: rgba(255, 255, 255, 0.45);
+  --card-accent-border: rgba(62, 207, 142, 0.30);
+  --card-accent-ring: rgba(62, 207, 142, 0.25);
+  --card-hover-shadow: 0 12px 28px -8px rgba(0, 0, 0, 0.08), 0 0 0 1px var(--card-accent-ring);
+  --card-transition-duration: 0.3s;
+  --card-transition-easing: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .dark {
@@ -127,4 +135,101 @@
   html {
     @apply font-sans;
   }
+}
+
+/* ==========================================================================
+   PREMIUM CARD SYSTEM
+   - GPU-accelerated via will-change + transform (no layout reflow on hover)
+   - Shine sweep uses only opacity + translate (compositor-only)
+   - Avoids `transition: all` which forces full style recalc every frame
+   ========================================================================== */
+
+/* Base shiny card — glow border + shine effect only */
+.shiny-card {
+  position: relative;
+  overflow: hidden;
+  /* Only transition properties that compose on the GPU */
+  transition:
+    box-shadow var(--card-transition-duration) var(--card-transition-easing),
+    border-color var(--card-transition-duration) var(--card-transition-easing);
+  will-change: box-shadow;
+}
+
+/* Pseudo-element for the shine sweep overlay */
+.shiny-card::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    105deg,
+    transparent 40%,
+    var(--card-shine-color) 50%,
+    transparent 60%
+  );
+  /* Use translate instead of absolute positioning for performance */
+  transform: translateX(-100%);
+  transition: none;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 5;
+}
+
+/* Hover: glow ring + shine */
+.shiny-card:hover {
+  box-shadow: var(--card-hover-shadow);
+  border-color: var(--card-accent-border) !important;
+}
+
+.shiny-card:hover::after {
+  animation: shine-sweep 1.2s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+  opacity: 1;
+}
+
+/* Lift variant — adds translateY for clickable/interactive cards */
+.shiny-card-hover-lift {
+  transition:
+    box-shadow var(--card-transition-duration) var(--card-transition-easing),
+    border-color var(--card-transition-duration) var(--card-transition-easing),
+    transform var(--card-transition-duration) var(--card-transition-easing);
+  will-change: transform, box-shadow;
+}
+
+.shiny-card-hover-lift:hover {
+  transform: translateY(-2px);
+}
+
+/* Shine keyframe — translate-only = compositor layer, zero layout impact */
+@keyframes shine-sweep {
+  0% {
+    transform: translateX(-100%);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(200%);
+    opacity: 0;
+  }
+}
+
+/* ==========================================================================
+   CONSISTENT SCROLLBAR STYLING
+   ========================================================================== */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 99px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
 }
