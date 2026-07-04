@@ -34,6 +34,12 @@ export interface ICalendarService {
     ticketId: string,
     meetingTime?: string | null
   ): Promise<MeetingDetails>;
+  scheduleTeamMeeting(
+    attendees: Array<{ email: string; name: string }>,
+    topic: string,
+    meetingTime: string,
+    durationMinutes: number
+  ): Promise<MeetingDetails>;
 }
 
 export interface JiraTask {

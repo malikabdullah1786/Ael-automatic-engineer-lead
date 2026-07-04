@@ -219,8 +219,9 @@ export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [interruptionReason, setInterruptionReason] = useState<string | null>(null);
 
-  // Mobile sidebar toggle
+  // Sidebar — starts closed; a media-query useEffect will open it on desktop
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(false);
 
   const [inputMessage, setInputMessage] = useState("");
   const [sendingMessage, setSendingMessage] = useState(false);
@@ -231,6 +232,19 @@ export default function Home() {
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Load and fetch database details on mount
+  // Responsive sidebar: open by default on desktop, closed on mobile
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)');
+    const update = (matches: boolean) => {
+      setIsDesktop(matches);
+      setIsSidebarOpen(matches); // open on desktop, closed on mobile
+    };
+    update(mq.matches);
+    const handler = (e: MediaQueryListEvent) => update(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
   useEffect(() => {
     fetchLogs();
     fetchProjects();
@@ -266,24 +280,47 @@ export default function Home() {
       const savedProject = localStorage.getItem("ael_selected_project");
       if (savedProject) setSelectedProjectId(savedProject);
       
-      // Restore chat sessions
-      const savedSessions = localStorage.getItem("ael_sessions");
-      if (savedSessions) {
+      // Restore chat sessions from DB first, fall back to local storage
+      const restoreChatSessions = async () => {
         try {
-          const parsed = JSON.parse(savedSessions);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setSessions(parsed);
-            setThreadId(parsed[0].threadId);
-            setMessages(parsed[0].messages || []);
-            setInterruptionReason(parsed[0].interruptionReason || null);
-            return;
+          const res = await fetch("/api/chat");
+          if (res.ok) {
+            const data = await res.json();
+            if (data.sessions && data.sessions.length > 0) {
+              setSessions(data.sessions);
+              const savedLastThread = localStorage.getItem("ael_last_thread_id");
+              const activeSession = data.sessions.find((s: any) => s.threadId === savedLastThread) || data.sessions[0];
+              setThreadId(activeSession.threadId);
+              setMessages(activeSession.messages || []);
+              setInterruptionReason(activeSession.interruptionReason || null);
+              return;
+            }
           }
-        } catch (e) {
-          console.error("Failed to load local storage sessions", e);
+        } catch (dbErr) {
+          console.error("Failed to fetch sessions from database, falling back to local storage", dbErr);
         }
-      }
-      // Start a default session if empty
-      handleStartNewChat([]);
+
+        const savedSessions = localStorage.getItem("ael_sessions");
+        if (savedSessions) {
+          try {
+            const parsed = JSON.parse(savedSessions);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setSessions(parsed);
+              const savedLastThread = localStorage.getItem("ael_last_thread_id");
+              const activeSession = parsed.find((s: any) => s.threadId === savedLastThread) || parsed[0];
+              setThreadId(activeSession.threadId);
+              setMessages(activeSession.messages || []);
+              setInterruptionReason(activeSession.interruptionReason || null);
+              return;
+            }
+          } catch (e) {
+            console.error("Failed to load local storage sessions", e);
+          }
+        }
+        await handleStartNewChat([]);
+      };
+
+      restoreChatSessions();
     }
   }, []);
 
@@ -749,7 +786,7 @@ export default function Home() {
   };
 
   // Start New Chat Session
-  const handleStartNewChat = (currentSessions = sessions) => {
+  const handleStartNewChat = async (currentSessions = sessions) => {
     const newId = `thread-${Math.random().toString(36).substring(2, 11)}`;
     const newSession: ChatSession = {
       threadId: newId,
@@ -762,6 +799,17 @@ export default function Home() {
     setMessages([]);
     setInterruptionReason(null);
     saveSessions(updated);
+    localStorage.setItem("ael_last_thread_id", newId);
+
+    try {
+      await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newSession),
+      });
+    } catch (e) {
+      console.error("Failed to save new session to database", e);
+    }
   };
 
   // Switch to selected session
@@ -771,30 +819,42 @@ export default function Home() {
       setThreadId(id);
       setMessages(session.messages || []);
       setInterruptionReason(session.interruptionReason || null);
+      localStorage.setItem("ael_last_thread_id", id);
     }
   };
 
   // Delete session
-  const handleDeleteSession = (id: string, e: React.MouseEvent) => {
+  const handleDeleteSession = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const updated = sessions.filter((s) => s.threadId !== id);
     saveSessions(updated);
+
+    try {
+      await fetch(`/api/chat?threadId=${id}`, {
+        method: "DELETE",
+      });
+    } catch (e) {
+      console.error("Failed to delete session from database", e);
+    }
+
     if (threadId === id) {
       if (updated.length > 0) {
         setThreadId(updated[0].threadId);
         setMessages(updated[0].messages || []);
         setInterruptionReason(updated[0].interruptionReason || null);
+        localStorage.setItem("ael_last_thread_id", updated[0].threadId);
       } else {
-        handleStartNewChat(updated);
+        await handleStartNewChat(updated);
       }
     }
   };
 
   // Update messages, interruption, and smart title in active session
-  const updateSessionData = (newMessages: ChatMessage[], newInterruption: string | null) => {
+  const updateSessionData = async (newMessages: ChatMessage[], newInterruption: string | null) => {
     setMessages(newMessages);
     setInterruptionReason(newInterruption);
 
+    let activeSession: ChatSession | null = null;
     const updated = sessions.map((s) => {
       if (s.threadId === threadId) {
         let title = s.title;
@@ -804,16 +864,29 @@ export default function Home() {
             title = firstUser.content.substring(0, 24) + (firstUser.content.length > 24 ? "..." : "");
           }
         }
-        return {
+        activeSession = {
           ...s,
           title,
           messages: newMessages,
           interruptionReason: newInterruption,
         };
+        return activeSession;
       }
       return s;
     });
     saveSessions(updated);
+
+    if (activeSession) {
+      try {
+        await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(activeSession),
+        });
+      } catch (e) {
+        console.error("Failed to save updated session to database", e);
+      }
+    }
   };
 
   // Submit agent chat message
@@ -964,21 +1037,141 @@ export default function Home() {
     );
   };
 
-  // Render markdown-like text as formatted HTML (no external dep)
-  const renderMarkdown = (text: string): string => {
+  // Helper to process inline styles (bold, italics, inline code, links)
+  const processInlineStyles = (text: string): string => {
     return text
       // Bold
-      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
       // Italic
-      .replace(/\*(.+?)\*/g, "<em>$1</em>")
+      .replace(/\*(.*?)\*/g, "<em>$1</em>")
       // Inline code
-      .replace(/`(.+?)`/g, "<code class='bg-slate-100 text-slate-700 px-1 rounded font-mono text-[10px]'>$1</code>")
-      // Bullet lines: lines that start with '  - ' or '- '
-      .replace(/^[ ]*- (.+)$/gm, "<li class='ml-4 list-disc leading-relaxed'>$1</li>")
-      // Wrap consecutive <li> in <ul>
-      .replace(/(<li[^>]*>.*<\/li>\n?)+/g, (m) => `<ul class='space-y-0.5 my-1'>${m}</ul>`)
-      // Newlines to <br> (not inside list items)
-      .replace(/\n(?!<\/?(ul|li))/g, "<br />");
+      .replace(/`(.*?)`/g, "<code class='bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-mono text-[10px] border border-slate-200/50'>$1</code>")
+      // Links [Text](URL)
+      .replace(/\[(.*?)\]\((.*?)\)/g, "<a href='$2' target='_blank' rel='noopener noreferrer' class='text-[#3ecf8e] hover:text-[#34b27b] hover:underline font-semibold'>$1</a>");
+  };
+
+  // Helper to render HTML tables with custom style matching our application theme (emerald borders, clean text)
+  const renderHtmlTable = (headers: string[], rows: string[][]): string => {
+    let html = `<div class="my-3 overflow-x-auto border border-slate-200 rounded-lg shadow-sm">`;
+    html += `<table class="min-w-full divide-y divide-slate-200 text-left text-[11px]">`;
+    
+    // Headers
+    html += `<thead class="bg-slate-50 font-bold text-slate-700"><tr>`;
+    headers.forEach(h => {
+      html += `<th class="px-3 py-2 border-b border-slate-200">${processInlineStyles(h)}</th>`;
+    });
+    html += `</tr></thead>`;
+    
+    // Rows
+    html += `<tbody class="divide-y divide-slate-200 bg-white text-slate-600">`;
+    if (rows.length === 0) {
+      html += `<tr><td colspan="${headers.length}" class="px-3 py-4 text-center text-slate-400 italic">No items found</td></tr>`;
+    } else {
+      rows.forEach(r => {
+         html += `<tr class="hover:bg-slate-50">`;
+         r.forEach(cell => {
+           html += `<td class="px-3 py-2 whitespace-nowrap">${processInlineStyles(cell)}</td>`;
+         });
+         html += `</tr>`;
+      });
+    }
+    html += `</tbody></table></div>`;
+    return html;
+  };
+
+  // Render markdown-like text as formatted HTML (no external dep)
+  const renderMarkdown = (text: string): string => {
+    const lines = text.split("\n");
+    let html = "";
+    let inList = false;
+    let inTable = false;
+    let tableHeaders: string[] = [];
+    let tableRows: string[][] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+
+      // Check if line is a table line
+      if (line.startsWith("|") && line.endsWith("|")) {
+        // Close list if we were in one
+        if (inList) {
+          html += "</ul>";
+          inList = false;
+        }
+
+        const cells = line
+          .split("|")
+          .slice(1, -1)
+          .map(c => c.trim());
+
+        if (!inTable) {
+          // This is the header row or line containing the columns
+          inTable = true;
+          tableHeaders = cells;
+          tableRows = [];
+        } else {
+          // Check if it's the separator row (contains only dashes, colons, or empty space)
+          const isSeparator = cells.every(c => /^[ :-]+$/.test(c));
+          if (!isSeparator) {
+            tableRows.push(cells);
+          }
+        }
+        continue;
+      } else {
+        // If we were in a table and this line is NOT a table line, render the table
+        if (inTable) {
+          html += renderHtmlTable(tableHeaders, tableRows);
+          inTable = false;
+          tableHeaders = [];
+          tableRows = [];
+        }
+      }
+
+      // Headers
+      if (line.startsWith("####")) {
+        html += `<h4 class="text-[11px] font-bold text-slate-800 mt-3 mb-1 uppercase tracking-wider">${processInlineStyles(line.replace(/^####\s*/, ""))}</h4>`;
+      } else if (line.startsWith("###")) {
+        html += `<h3 class="text-xs font-bold text-slate-800 mt-4 mb-1.5 flex items-center gap-1.5">${processInlineStyles(line.replace(/^###\s*/, ""))}</h3>`;
+      } else if (line.startsWith("##")) {
+        html += `<h2 class="text-sm font-bold text-slate-900 mt-5 mb-2 pb-1 border-b border-slate-100 flex items-center gap-2">${processInlineStyles(line.replace(/^##\s*/, ""))}</h2>`;
+      } else if (line.startsWith("#")) {
+        html += `<h1 class="text-base font-extrabold text-slate-950 mt-6 mb-3">${processInlineStyles(line.replace(/^#\s*/, ""))}</h1>`;
+      }
+      // Bullet lists
+      else if (line.startsWith("- ") || line.startsWith("* ")) {
+        if (!inList) {
+          html += "<ul class='space-y-1 my-2 ml-4 list-disc text-slate-600'>";
+          inList = true;
+        }
+        html += `<li>${processInlineStyles(line.replace(/^[-*]\s*/, ""))}</li>`;
+      }
+      // Horizontal Rule
+      else if (line === "***" || line === "---" || line === "___") {
+        html += "<hr class='my-4 border-slate-200' />";
+      }
+      // Plain lines
+      else {
+        if (inList) {
+          html += "</ul>";
+          inList = false;
+        }
+        if (line === "") {
+          html += "<div class='h-2'></div>";
+        } else {
+          html += `<p class="leading-relaxed mb-1.5">${processInlineStyles(line)}</p>`;
+        }
+      }
+    }
+
+    // Clean up remaining open structures
+    if (inList) {
+      html += "</ul>";
+    }
+    if (inTable) {
+      html += renderHtmlTable(tableHeaders, tableRows);
+    }
+
+    return html;
   };
 
   // Filter and sort projects
@@ -1075,75 +1268,162 @@ export default function Home() {
             </div>
           </div>
 
+          {/* Features & Capabilities Showcase */}
+          <div className="w-full space-y-8 text-left scroll-mt-20">
+            <div className="border-l-4 border-[#3ecf8e] pl-4">
+              <h2 className="text-xl font-bold text-slate-900">Agent Core Capabilities & Features</h2>
+              <p className="text-xs text-slate-500 mt-1">Explore how AEL coordinates workflows, schedules events, and triages bugs autonomously.</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="bg-white border border-slate-200/60 rounded-2xl p-5 shadow-sm space-y-3">
+                <div className="text-2xl">🚨</div>
+                <h3 className="text-sm font-bold text-slate-900">Autonomous Incident Triaging</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Ingests real-time telemetry error logs, semantic-audits GitHub commits to find the regression commit, scans developer workload, checks for database overrides, and logs issues into Supabase.
+                </p>
+              </div>
+
+              <div className="bg-white border border-slate-200/60 rounded-2xl p-5 shadow-sm space-y-3">
+                <div className="text-2xl">📅</div>
+                <h3 className="text-sm font-bold text-slate-900">Remediation Sync Scheduling</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Automatically books a 15-minute 1-on-1 Google Calendar meeting with the culprit developer, attaches a Google Meet link, and registers the ticket details to prevent future SRE regressions.
+                </p>
+              </div>
+
+              <div className="bg-white border border-slate-200/60 rounded-2xl p-5 shadow-sm space-y-3">
+                <div className="text-2xl">👥</div>
+                <h3 className="text-sm font-bold text-slate-900">Real-Time Team Syncs</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Handles full-team calendar meetings with Google Meet URLs, sends email invites to all developers at once, and documents standard standings in standup and weekly SRE reports.
+                </p>
+              </div>
+
+              <div className="bg-white border border-slate-200/60 rounded-2xl p-5 shadow-sm space-y-3">
+                <div className="text-2xl">✉️</div>
+                <h3 className="text-sm font-bold text-slate-900">Direct SMTP Gmail Outreach</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Gathers sender name, target developer, project context, and custom notes. Then drafts and sends a professional email using Gmail SMTP and nodemailer instantly.
+                </p>
+              </div>
+
+              <div className="bg-white border border-slate-200/60 rounded-2xl p-5 shadow-sm space-y-3">
+                <div className="text-2xl">🧩</div>
+                <h3 className="text-sm font-bold text-slate-900">SRE Standup Summarizer</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Collects developer git commits, Jira tickets, and pending incidents to assemble structured Standups, Today's Summaries, and Weekly SRE Performance reports dynamically.
+                </p>
+              </div>
+
+              <div className="bg-white border border-slate-200/60 rounded-2xl p-5 shadow-sm space-y-3">
+                <div className="text-2xl">🛡️</div>
+                <h3 className="text-sm font-bold text-slate-900">Interactive HIL Dashboard</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Features a dynamic sidebar navigation system, interactive project telemetry tracking charts, live commit history logs, database telemetry records, and full-featured chatbot control.
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* Architecture Visual Diagram */}
           <div id="architecture" className="w-full space-y-6 text-left scroll-mt-20">
             <div className="border-l-4 border-[#3ecf8e] pl-4">
-              <h2 className="text-xl font-bold text-slate-900">System Architecture & Flow</h2>
-              <p className="text-xs text-slate-500 mt-1">How the AEL LangGraph state machine handles crash diagnostics, developer matching, and meeting booking.</p>
+              <h2 className="text-xl font-bold text-slate-900">System Architecture & LangGraph State Flow</h2>
+              <p className="text-xs text-slate-500 mt-1">
+                How the AEL LangGraph agent integrates telemetry stores, Git commits, Google Workspace APIs, and SMTP outreach.
+              </p>
             </div>
             <div className="bg-white border border-slate-200/60 rounded-2xl p-6 shadow-sm flex flex-col md:flex-row gap-6 items-stretch">
               <div className="flex-1 space-y-4 flex flex-col justify-center">
                 <div className="flex items-start gap-3">
                   <div className="w-6 h-6 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold flex items-center justify-center shrink-0">1</div>
                   <div>
-                    <h4 className="text-xs font-bold text-slate-900">Telemetry Ingestion</h4>
-                    <p className="text-[11px] text-slate-500 mt-0.5">Real-time database crash logs or server issues trigger events in the `system_events` telemetry log.</p>
+                    <h4 className="text-xs font-bold text-slate-900">Telemetry Ingestion & Supabase DB</h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      DB crash exceptions and SRE metrics log to `system_events`. AEL queries these logs autonomously to locate unresolved issues.
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-start gap-3">
                   <div className="w-6 h-6 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold flex items-center justify-center shrink-0">2</div>
                   <div>
-                    <h4 className="text-xs font-bold text-slate-900">Semantic Audit & Git Diff</h4>
-                    <p className="text-[11px] text-slate-500 mt-0.5">AEL fetches the recent commits from GitHub using the Repository URL and compares the crash trace against the commit code diffs using Gemini.</p>
+                    <h4 className="text-xs font-bold text-slate-900">Git regression Mapping (Octokit)</h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      AEL fetches the recent commits from GitHub and semantic-matches stack traces to locate culprit code changes.
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-start gap-3">
                   <div className="w-6 h-6 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold flex items-center justify-center shrink-0">3</div>
                   <div>
-                    <h4 className="text-xs font-bold text-slate-900">Developer Workload Scan</h4>
-                    <p className="text-[11px] text-slate-500 mt-0.5">AEL audits the active task lists for the culprit developer. If they have over 3 critical or overdue tasks, a workload warning is raised.</p>
+                    <h4 className="text-xs font-bold text-slate-900">LangGraph State Machine Router</h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Routes the agent state dynamically. Flags developer workload overloads or unmapped email addresses to request manual approvals.
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-start gap-3">
                   <div className="w-6 h-6 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold flex items-center justify-center shrink-0">4</div>
                   <div>
-                    <h4 className="text-xs font-bold text-slate-900">Human-in-the-Loop Override</h4>
-                    <p className="text-[11px] text-slate-500 mt-0.5">The agent pauses execution at critical junctions (e.g. unmapped developer details or workload overrides) to prompt the user for input or confirmation.</p>
+                    <h4 className="text-xs font-bold text-slate-900">Google Calendar & Google Meet Sync</h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Generates dynamic calendar invite invites with `organizer` metadata to avoid spam warnings and automatically provisions Google Meet conference rooms.
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-start gap-3">
                   <div className="w-6 h-6 rounded-full bg-emerald-50 text-emerald-600 text-xs font-bold flex items-center justify-center shrink-0">5</div>
                   <div>
-                    <h4 className="text-xs font-bold text-slate-900">Remediation Scheduling</h4>
-                    <p className="text-[11px] text-slate-500 mt-0.5">Upon approval, AEL automatically creates an incident ticket, schedules a 15-min Google Calendar sync, and posts a Google Meet link in the chat console.</p>
+                    <h4 className="text-xs font-bold text-slate-900">Direct SMTP Outreach (Nodemailer)</h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Sends real-time email notifications containing incident reports, checklists, and calendar links using Gmail App Passwords.
+                    </p>
                   </div>
                 </div>
               </div>
-              <div className="flex-1 bg-slate-50 rounded-xl p-4 flex items-center justify-center border border-slate-100">
-                <svg className="w-full h-auto max-w-[400px]" viewBox="0 0 400 320" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <rect x="140" y="20" width="120" height="40" rx="6" fill="#1e293b" />
-                  <text x="200" y="44" fill="white" fontSize="10" fontWeight="bold" textAnchor="middle">DB Crash Ingested</text>
+              <div className="flex-1 bg-slate-50 rounded-xl p-4 flex flex-col items-center justify-center border border-slate-100 min-h-[360px]">
+                <div className="mb-2 text-center">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Active Data Flow Pipeline</span>
+                </div>
+                <svg className="w-full h-auto max-w-[420px]" viewBox="0 0 400 350" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  {/* Telemetry log block */}
+                  <rect x="130" y="10" width="140" height="35" rx="6" fill="#1e293b" />
+                  <text x="200" y="32" fill="white" fontSize="9" fontWeight="bold" textAnchor="middle">Supabase Telemetry Ingest</text>
                   
-                  <path d="M200 60V90" stroke="#94a3b8" strokeWidth="2" strokeDasharray="3 3" />
+                  <path d="M200 45V75" stroke="#94a3b8" strokeWidth="2" strokeDasharray="3 3" />
                   
-                  <rect x="140" y="90" width="120" height="40" rx="6" fill="#0f766e" />
-                  <text x="200" y="114" fill="white" fontSize="10" fontWeight="bold" textAnchor="middle">Fetch Git Commits</text>
+                  {/* Git Diff matching */}
+                  <rect x="130" y="75" width="140" height="35" rx="6" fill="#0f766e" />
+                  <text x="200" y="97" fill="white" fontSize="9" fontWeight="bold" textAnchor="middle">Octokit Git Code Audit</text>
                   
-                  <path d="M200 130V160" stroke="#94a3b8" strokeWidth="2" strokeDasharray="3 3" />
+                  <path d="M200 110V140" stroke="#94a3b8" strokeWidth="2" strokeDasharray="3 3" />
                   
-                  <rect x="140" y="160" width="120" height="40" rx="6" fill="#0369a1" />
-                  <text x="200" y="184" fill="white" fontSize="10" fontWeight="bold" textAnchor="middle">Semantic Audit</text>
+                  {/* LangGraph Core state machine */}
+                  <rect x="110" y="140" width="180" height="50" rx="8" fill="#312e81" stroke="#4338ca" strokeWidth="2" />
+                  <text x="200" y="163" fill="white" fontSize="10" fontWeight="bold" textAnchor="middle">LangGraph State machine</text>
+                  <text x="200" y="178" fill="#c7d2fe" fontSize="8" textAnchor="middle">Workload & Email Guardrails</text>
                   
-                  <path d="M200 200V230" stroke="#94a3b8" strokeWidth="2" strokeDasharray="3 3" />
+                  {/* Branching paths from LangGraph */}
+                  <path d="M150 190V230" stroke="#94a3b8" strokeWidth="2" strokeDasharray="3 3" />
+                  <path d="M250 190V230" stroke="#94a3b8" strokeWidth="2" strokeDasharray="3 3" />
                   
-                  <rect x="120" y="230" width="160" height="45" rx="6" fill="#b45309" />
-                  <text x="200" y="248" fill="white" fontSize="9" fontWeight="bold" textAnchor="middle">Human Approval / Interrupt</text>
-                  <text x="200" y="261" fill="#fed7aa" fontSize="7" textAnchor="middle">Unmapped Email / Overload</text>
+                  {/* Human-in-the-loop validation */}
+                  <rect x="50" y="230" width="130" height="40" rx="6" fill="#b45309" />
+                  <text x="115" y="250" fill="white" fontSize="8" fontWeight="bold" textAnchor="middle">Human-in-the-loop Intercept</text>
+                  <text x="115" y="261" fill="#fed7aa" fontSize="7" textAnchor="middle">(User overrides / approval)</text>
                   
-                  <path d="M200 275V295" stroke="#94a3b8" strokeWidth="2" strokeDasharray="3 3" />
+                  {/* Google Calendar meeting scheduler */}
+                  <rect x="220" y="230" width="130" height="40" rx="6" fill="#0369a1" />
+                  <text x="285" y="250" fill="white" fontSize="8" fontWeight="bold" textAnchor="middle">Google Calendar & Meet</text>
+                  <text x="285" y="261" fill="#e0f2fe" fontSize="7" textAnchor="middle">(Auto-provisions Meets)</text>
                   
-                  <rect x="130" y="295" width="140" height="35" rx="6" fill="#047857" />
-                  <text x="200" y="316" fill="white" fontSize="9" fontWeight="bold" textAnchor="middle">Ticket & Google Meet</text>
+                  <path d="M115 270V300" stroke="#94a3b8" strokeWidth="2" strokeDasharray="3 3" />
+                  <path d="M285 270V300" stroke="#94a3b8" strokeWidth="2" strokeDasharray="3 3" />
+                  
+                  {/* Nodemailer SMTP Email */}
+                  <rect x="110" y="300" width="180" height="35" rx="6" fill="#047857" />
+                  <text x="200" y="322" fill="white" fontSize="9" fontWeight="bold" textAnchor="middle">Nodemailer SMTP Email dispatch</text>
                 </svg>
               </div>
             </div>
@@ -1231,9 +1511,83 @@ export default function Home() {
         </main>
 
         {/* Footer */}
-        <footer className="h-16 border-t border-slate-200 bg-white px-6 md:px-12 flex items-center justify-between text-xs text-slate-400">
-          <span>Autonomous Engineering Lead Agent Project</span>
-          <span>{"\u00A9"} 2026. All Rights Reserved.</span>
+        <footer className="border-t border-slate-200/80 bg-white pt-12 pb-8 px-6 md:px-12 w-full mt-24">
+          <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-8 mb-8 text-left">
+            {/* Column 1: Brand info */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="h-6 w-6 rounded bg-[#ecfdf5] border border-[#a7f3d0] flex items-center justify-center">
+                  <svg className="w-3.5 h-3.5 text-[#3ecf8e]" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M21.36 9.8a1.05 1.05 0 00-1-1H14.1l2.5-6.83a1.05 1.05 0 00-1.85-.92L5.87 11.23a1.05 1.05 0 00.78 1.77h6.26l-2.5 6.83a1.05 1.05 0 001.85.92L21.23 11a1.05 1.05 0 00.13-1.2z" />
+                  </svg>
+                </div>
+                <span className="font-bold text-slate-800 text-sm">AEL Agent</span>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                The world's first fully autonomous site reliability engineering and workflow automation agent.
+              </p>
+              <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-100 text-[10px] text-emerald-600 font-semibold">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#3ecf8e] animate-pulse"></span>
+                Systems Operational
+              </div>
+            </div>
+
+            {/* Column 2: Capabilities */}
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Features</h4>
+              <ul className="space-y-1.5 text-[11px] text-slate-400">
+                <li><span className="hover:text-slate-600 transition-colors">Incident Triaging</span></li>
+                <li><span className="hover:text-slate-600 transition-colors">Remediation Invites</span></li>
+                <li><span className="hover:text-slate-600 transition-colors">Sprint Daily Standups</span></li>
+                <li><span className="hover:text-slate-600 transition-colors">Google Meet Integrations</span></li>
+              </ul>
+            </div>
+
+            {/* Column 3: Technologies */}
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Built With</h4>
+              <ul className="space-y-1.5 text-[11px] text-slate-400">
+                <li><span className="hover:text-slate-600 transition-colors">Gemini 3.5 & LangGraph</span></li>
+                <li><span className="hover:text-slate-600 transition-colors">Next.js & Supabase DB</span></li>
+                <li><span className="hover:text-slate-600 transition-colors">Octokit GitHub API</span></li>
+                <li><span className="hover:text-slate-600 transition-colors">Gmail SMTP & Nodemailer</span></li>
+              </ul>
+            </div>
+
+            {/* Column 4: Shortcuts */}
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Quick Links</h4>
+              <ul className="space-y-1.5 text-[11px] text-slate-400">
+                <li>
+                  <button onClick={() => navigateTo("app")} className="hover:text-slate-600 transition-colors cursor-pointer text-left">
+                    Launch Workspace Dashboard
+                  </button>
+                </li>
+                <li>
+                  <a href="#architecture" className="hover:text-slate-600 transition-colors">
+                    System Architecture Diagram
+                  </a>
+                </li>
+                <li>
+                  <a href="https://vercel.com" target="_blank" rel="noreferrer" className="hover:text-slate-600 transition-colors">
+                    Deploy on Vercel
+                  </a>
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          {/* Lower footer strip */}
+          <div className="max-w-5xl mx-auto border-t border-slate-100 pt-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-[10px] text-slate-400">
+            <div>
+              <span>{"\u00A9"} 2026 Autonomous Engineering Lead. Released under MIT License.</span>
+            </div>
+            <div className="flex gap-4">
+              <span className="hover:text-slate-600 transition-colors">Privacy Policy</span>
+              <span className="hover:text-slate-600 transition-colors">Terms of Service</span>
+              <span className="hover:text-slate-600 transition-colors">SRE Status</span>
+            </div>
+          </div>
         </footer>
 
         {/* Floating Chat Copilot Button */}
@@ -1323,11 +1677,11 @@ export default function Home() {
         {/* ========================================================================= */}
         {/* Desktop: static sidebar. Mobile: slide-in overlay */}
         <aside className={`
-          fixed md:static inset-y-0 left-0 z-40
+          fixed inset-y-0 left-0 z-40
           w-72 md:w-60 bg-white border-r border-[#e5e7eb] flex flex-col justify-between shrink-0
           transform transition-transform duration-300 ease-in-out
-          ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
-          top-0 md:top-auto
+          ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+          top-0
         `}>
           <div>
             {/* Top Logo Panel */}
@@ -1475,18 +1829,43 @@ export default function Home() {
         {/* ========================================================================= */}
         {/* 2. MAIN CONTAINER: HEADER, WORKSPACE, FOOTER                              */}
         {/* ========================================================================= */}
-        <div className="flex-1 flex flex-col min-h-0 min-w-0 bg-[#fcfcfc] relative">
+        <div
+          className="flex flex-col min-h-0 min-w-0 bg-[#fcfcfc] relative transition-all duration-300 overflow-hidden"
+          style={{
+            // On mobile: sidebar overlays content — no shift needed, always full width
+            // On desktop: sidebar is fixed in-flow equivalent — shift content right
+            marginLeft: isDesktop && isSidebarOpen ? '240px' : '0',
+            width: isDesktop && isSidebarOpen ? 'calc(100% - 240px)' : '100%',
+          }}
+        >
 
 
           {/* Top Header Bar */}
           <header className="h-14 border-b border-[#e5e7eb] flex items-center justify-between px-4 md:px-6 bg-white shrink-0 mt-14 md:mt-0">
-            {/* Breadcrumb path */}
-            <div className="flex items-center gap-2 text-xs font-medium">
-              <span className="text-[#6b7280] hidden sm:inline">AEL</span>
-              <span className="text-[#d1d5db] hidden sm:inline">/</span>
-              <span className="text-[#111827] font-semibold capitalize">
-                {activeTab === "projects" ? "Projects" : activeTab === "chat" ? "Co-Pilot" : activeTab}
-              </span>
+            <div className="flex items-center gap-3">
+              {/* Sidebar toggle — visible on all screen sizes */}
+              <button
+                onClick={() => setIsSidebarOpen(prev => !prev)}
+                className="p-1.5 rounded-md text-[#6b7280] hover:bg-[#f3f4f6] hover:text-[#111827] transition-all"
+                aria-label="Toggle sidebar"
+                title={isSidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  {isSidebarOpen ? (
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M11 19l-7-7 7-7M18 19l-7-7 7-7" />
+                  ) : (
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7M6 5l7 7-7 7" />
+                  )}
+                </svg>
+              </button>
+              {/* Breadcrumb path */}
+              <div className="flex items-center gap-2 text-xs font-medium">
+                <span className="text-[#6b7280] hidden sm:inline">AEL</span>
+                <span className="text-[#d1d5db] hidden sm:inline">/</span>
+                <span className="text-[#111827] font-semibold capitalize">
+                  {activeTab === "projects" ? "Projects" : activeTab === "chat" ? "Co-Pilot" : activeTab}
+                </span>
+              </div>
             </div>
 
             {/* Right Header actions */}
@@ -1920,9 +2299,12 @@ export default function Home() {
                       ) : (
                         <div className="space-y-3.5 max-h-[380px] overflow-y-auto pr-1">
                           {activeProjectCommits.slice(0, 6).map((commit: any) => (
-                            <div key={commit.sha} className="relative pl-4 pb-3.5 border-l border-slate-100 last:pb-0 last:border-none">
+                            <div key={commit.sha} className="relative pl-4 pb-3.5 border-l-2 border-[#3ecf8e]/35 last:pb-0 last:border-none">
                               {/* Timeline indicator node */}
-                              <div className="absolute -left-[4.5px] top-1.5 h-2 w-2 rounded-full border border-white bg-[#3ecf8e]"/>
+                              <div 
+                                className="absolute bg-[#3ecf8e] border-2 border-white shadow-sm"
+                                style={{ left: "-6px", top: "6px", width: "10px", height: "10px", borderRadius: "50%" }}
+                              />
                               
                               <div className="space-y-1">
                                 <p className="text-[11px] font-semibold text-slate-900 leading-snug break-words">
@@ -2115,69 +2497,153 @@ export default function Home() {
                   </div>
 
                   {/* Messages Stream */}
-                  <div className="flex-1 min-h-0 bg-[#fcfcfc] p-4">
-                    <ScrollArea className="h-full">
-                      <div className="space-y-4">
+                  <div className="flex-1 min-h-0 overflow-hidden bg-[#fcfcfc]">
+                    <ScrollArea className="h-full w-full">
+                      <div className="space-y-4 py-3 px-2">
                         {messages.length === 0 ? (
-                          <div className="flex flex-col items-center justify-center text-center h-[260px] text-[#6b7280] px-6">
-                            <div className="h-8 w-8 rounded-full border border-[#e5e7eb] flex items-center justify-center text-[#3ecf8e] mb-3 font-mono text-xs">
-                              &gt;_
+                          <div className="flex flex-col items-center w-full py-6 px-3">
+                            {/* Header */}
+                            <div className="flex items-center gap-2 mb-1">
+                              <div className="h-7 w-7 rounded-full bg-[#ecfdf5] border border-[#a7f3d0] flex items-center justify-center">
+                                <svg className="w-4 h-4 text-[#3ecf8e]" fill="currentColor" viewBox="0 0 24 24">
+                                  <path d="M21.36 9.8a1.05 1.05 0 00-1-1H14.1l2.5-6.83a1.05 1.05 0 00-1.85-.92L5.87 11.23a1.05 1.05 0 00.78 1.77h6.26l-2.5 6.83a1.05 1.05 0 001.85.92L21.23 11a1.05 1.05 0 00.13-1.2z" />
+                                </svg>
+                              </div>
+                              <p className="text-sm font-bold text-[#111827]">AEL — Autonomous Engineering Lead</p>
                             </div>
-                            <p className="text-xs font-bold text-[#111827]">Terminal Active</p>
-                            <p className="text-[10px] text-[#6b7280] max-w-[320px] mt-1 leading-relaxed">
-                              Ask AEL to schedule a status update, daily standup, or investigate the latest backend database crash.
+                            <p className="text-[11px] text-[#6b7280] mb-5 text-center max-w-sm">
+                              Your AI-powered SRE agent. Click a chip below or type a command to get started.
                             </p>
+
+                            {/* Feature Grid */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full max-w-xl">
+                              {[
+                                {
+                                  icon: "🧩",
+                                  title: "Sprint Daily Standup",
+                                  desc: "Generate an AI standup report from today's commits, open tickets, and team activity.",
+                                  chip: "Sprint Daily Standup",
+                                  color: "bg-purple-50 border-purple-200 text-purple-700",
+                                },
+                                {
+                                  icon: "🚨",
+                                  title: "Triage Latest Crash",
+                                  desc: "Detect the latest system crash, auto-assign it to the responsible developer, and open a Jira ticket.",
+                                  chip: "Triage Latest Crash",
+                                  color: "bg-red-50 border-red-200 text-red-700",
+                                },
+                                {
+                                  icon: "📅",
+                                  title: "Today's Summary",
+                                  desc: "View all incidents, meetings, and actions taken by AEL today in one SRE report.",
+                                  chip: "Show me a summary of today",
+                                  color: "bg-blue-50 border-blue-200 text-blue-700",
+                                },
+                                {
+                                  icon: "📊",
+                                  title: "Weekly Summary",
+                                  desc: "Full weekly SRE performance report — incidents, uptime, developer contributions, and meetings.",
+                                  chip: "Show me a summary of this week",
+                                  color: "bg-indigo-50 border-indigo-200 text-indigo-700",
+                                },
+                                {
+                                  icon: "✉️",
+                                  title: "Direct Email",
+                                  desc: "Select a team member, provide context, and AEL drafts and sends a professional email via Gmail.",
+                                  chip: "Send a direct email to a team member",
+                                  color: "bg-emerald-50 border-emerald-200 text-emerald-700",
+                                },
+                                {
+                                  icon: "👥",
+                                  title: "Schedule Team Meeting",
+                                  desc: "Book a Google Meet for the entire team, generate the link, and send calendar invites automatically.",
+                                  chip: "Schedule a team meeting",
+                                  color: "bg-amber-50 border-amber-200 text-amber-700",
+                                },
+                              ].map((f) => (
+                                <button
+                                  key={f.title}
+                                  onClick={() => triggerAgentMessage(f.chip)}
+                                  disabled={sendingMessage}
+                                  className="text-left p-3 rounded-lg border bg-white hover:shadow-md transition-all group cursor-pointer border-[#e5e7eb] hover:border-[#3ecf8e]"
+                                >
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${f.color}`}>
+                                      {f.icon} {f.title}
+                                    </span>
+                                  </div>
+                                  <p className="text-[10px] text-[#6b7280] leading-relaxed group-hover:text-[#374151] transition-colors">
+                                    {f.desc}
+                                  </p>
+                                </button>
+                              ))}
+                            </div>
                           </div>
                         ) : (
-                          messages.map((m, idx) => (
-                            <div
-                              key={idx}
-                              className={`flex flex-col group relative ${
-                                m.role === "user" ? "items-end" : "items-start"
-                              }`}
-                            >
-                              <div className="flex items-center gap-1.5 mb-0.5">
-                                <span className="text-[9px] text-[#6b7280] font-semibold">
-                                  {m.role === "user" ? "Developer Override" : "Autonomous Lead"}
-                                </span>
-                                <button
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(m.content);
-                                    toast.success("Message copied to clipboard!");
-                                  }}
-                                  className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 text-slate-400 hover:text-slate-600 rounded flex items-center justify-center"
-                                  title="Copy message text"
-                                >
-                                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                                  </svg>
-                                </button>
-                              </div>
+                          messages.map((m, idx) => {
+                            const isUser = m.role === "user";
+                            return (
                               <div
-                                className={`rounded-lg px-3.5 py-2.5 text-xs max-w-[85%] leading-relaxed ${
-                                  m.role === "user"
-                                    ? "bg-white text-[#111827] border border-[#e5e7eb] shadow-sm"
-                                    : "bg-[#f9fafb] text-[#374151] border border-[#e5e7eb]"
-                                }`}
+                                key={idx}
+                                className={`flex flex-col group ${isUser ? "items-end" : "items-start"}`}
                               >
-                                {m.role === "assistant" ? (
-                                  <div
-                                    className="prose-sm"
-                                    dangerouslySetInnerHTML={{ __html: renderMarkdown(m.content) }}
-                                  />
-                                ) : (
-                                  <span>{m.content}</span>
-                                )}
+                                {/* Label row */}
+                                <div className={`flex items-center gap-1.5 mb-0.5 ${isUser ? "pr-2" : ""}`}>
+                                  <span className="text-[9px] text-[#6b7280] font-semibold">
+                                    {isUser ? "Developer Override" : "Autonomous Lead"}
+                                  </span>
+                                  <button
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(m.content);
+                                      toast.success("Message copied to clipboard!");
+                                    }}
+                                    className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 text-slate-400 hover:text-slate-600 rounded"
+                                    title="Copy message text"
+                                  >
+                                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                                    </svg>
+                                  </button>
+                                </div>
+
+                                {/* Bubble — user gets mr-3 to guarantee right clearance */}
+                                <div
+                                  className={`rounded-lg px-3.5 py-2.5 text-xs leading-relaxed break-words ${
+                                    isUser
+                                      ? "max-w-[72%] mr-3 bg-white text-[#111827] border border-[#e5e7eb] shadow-sm"
+                                      : "max-w-[88%] bg-[#f9fafb] text-[#374151] border border-[#e5e7eb]"
+                                  }`}
+                                >
+                                  {m.role === "assistant" ? (
+                                    <div
+                                      className="prose-sm"
+                                      dangerouslySetInnerHTML={{ __html: renderMarkdown(m.content) }}
+                                    />
+                                  ) : (
+                                    <span>{m.content}</span>
+                                  )}
+                                </div>
                               </div>
-                            </div>
-                          ))
+                            );
+                          })
                         )}
 
                         {/* Interruption overrides */}
                         {interruptionReason && (
-                          <div className="border bg-amber-50/50 border-amber-200 rounded-md p-4 space-y-3 mt-3">
-                            <div className="flex items-center gap-1.5 text-[10px] text-amber-700 font-bold uppercase tracking-wider">
-                              <span>{"\u26A1"}</span> Interrupt Intercepted (HIL Action)
+                          <div className={`border rounded-md p-4 space-y-3 mt-3 ${
+                            interruptionReason.startsWith("email_")
+                              ? "bg-emerald-50/40 border-emerald-200"
+                              : "bg-amber-50/50 border-amber-200"
+                          }`}>
+                            <div className={`flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider ${
+                              interruptionReason.startsWith("email_")
+                                ? "text-emerald-700"
+                                : "text-amber-700"
+                            }`}>
+                              <span>{interruptionReason.startsWith("email_") ? "✉️" : "⚡"}</span>{" "}
+                              {interruptionReason.startsWith("email_") 
+                                ? "Email Co-Pilot Assistant" 
+                                : "Interrupt Intercepted (HIL Action)"}
                             </div>
 
                             {/* Ticket Approval Panel */}
@@ -2356,6 +2822,88 @@ export default function Home() {
                               </div>
                             )}
 
+                            {/* Direct Email Target Selection Panel */}
+                            {interruptionReason === "email_target_selection" && (
+                              <div className="space-y-2">
+                                <p className="text-[11px] text-[#374151] font-semibold leading-relaxed">
+                                  Select a team member to email:
+                                </p>
+                                <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto pr-1">
+                                  {team.map((member, idx) => (
+                                    <Button
+                                      key={member.dev_id}
+                                      onClick={() => triggerAgentMessage(member.name)}
+                                      className="bg-white border border-[#e5e7eb] hover:bg-[#f9fafb] text-[#111827] text-xs h-8 justify-start font-semibold rounded shadow-sm text-left px-3 flex items-center gap-2"
+                                      disabled={sendingMessage}
+                                    >
+                                      <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">
+                                        {idx + 1}
+                                      </span>
+                                      <span className="truncate">{member.name} ({member.email_address})</span>
+                                    </Button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Direct Email Topic Input Suggestions Panel */}
+                            {interruptionReason === "email_topic_required" && (
+                              <div className="space-y-2">
+                                <p className="text-[11px] text-[#374151] font-semibold leading-relaxed">
+                                  Select a common email topic or type a custom one in the chat input below:
+                                </p>
+                                <div className="flex flex-wrap gap-1.5 pt-1">
+                                  {[
+                                    "Sprint Status Update",
+                                    "Code Review Request",
+                                    "Production Crash Resolution",
+                                    "Meeting Schedule Alignment"
+                                  ].map((topic) => (
+                                    <Button
+                                      key={topic}
+                                      onClick={() => triggerAgentMessage(topic)}
+                                      className="bg-white border border-[#e5e7eb] hover:bg-[#f9fafb] text-[#111827] text-xs h-8 font-semibold rounded shadow-sm px-3"
+                                      disabled={sendingMessage}
+                                    >
+                                      {topic}
+                                    </Button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Direct Email Send Approval Panel */}
+                            {interruptionReason === "email_send_approval" && (
+                              <div className="space-y-2">
+                                <p className="text-[11px] text-[#374151] leading-relaxed">
+                                  A professional email has been generated. Ready to deliver the email?
+                                </p>
+                                <div className="flex gap-2">
+                                  <Button
+                                    onClick={() => triggerAgentMessage("yes")}
+                                    className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white text-xs h-8 flex-1 font-bold rounded shadow-sm flex items-center justify-center gap-1.5"
+                                    disabled={sendingMessage}
+                                  >
+                                    <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                    </svg>
+                                    Send Email
+                                  </Button>
+                                  <Button
+                                    onClick={() => triggerAgentMessage("no")}
+                                    variant="outline"
+                                    className="border-[#e5e7eb] hover:bg-[#f9fafb] text-red-650 text-xs h-8 flex-1 rounded bg-white flex items-center justify-center gap-1.5 text-red-650"
+                                    disabled={sendingMessage}
+                                  >
+                                    <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                    Cancel Draft
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
+
                           </div>
                         )}
 
@@ -2387,31 +2935,81 @@ export default function Home() {
                         className="text-[10px] px-2.5 py-1.5 rounded-md bg-white hover:bg-[#f9fafb] border border-[#e5e7eb] text-[#374151] font-medium transition-colors cursor-pointer shadow-sm"
                         disabled={sendingMessage}
                       >
-                        {"\uD83D\uDD0D"} Triage Latest Crash
+                        🔎 Triage Latest Crash
+                      </button>
+                      <button
+                        onClick={() => triggerAgentMessage("Show me a summary of today")}
+                        className="text-[10px] px-2.5 py-1.5 rounded-md bg-white hover:bg-[#f9fafb] border border-[#e5e7eb] text-[#374151] font-medium transition-colors cursor-pointer shadow-sm"
+                        disabled={sendingMessage}
+                      >
+                        📅 Today's Summary
+                      </button>
+                      <button
+                        onClick={() => triggerAgentMessage("Show me a summary of this week")}
+                        className="text-[10px] px-2.5 py-1.5 rounded-md bg-white hover:bg-[#f9fafb] border border-[#e5e7eb] text-[#374151] font-medium transition-colors cursor-pointer shadow-sm"
+                        disabled={sendingMessage}
+                      >
+                        📅 Weekly Summary
+                      </button>
+                      <button
+                        onClick={() => triggerAgentMessage("Send a direct email to a team member")}
+                        className="text-[10px] px-2.5 py-1.5 rounded-md bg-white hover:bg-[#f9fafb] border border-[#e5e7eb] text-[#374151] font-medium transition-colors cursor-pointer shadow-sm"
+                        disabled={sendingMessage}
+                      >
+                        ✉️ Direct Email
+                      </button>
+                      <button
+                        onClick={() => triggerAgentMessage("Schedule a team meeting")}
+                        className="text-[10px] px-2.5 py-1.5 rounded-md bg-white hover:bg-[#f9fafb] border border-[#e5e7eb] text-[#374151] font-medium transition-colors cursor-pointer shadow-sm"
+                        disabled={sendingMessage}
+                      >
+                        👥 Team Meeting
                       </button>
                     </div>
                   )}
 
                   {/* Chat Input Form — always enabled; free-text resumes the agent graph */}
-                  <form onSubmit={handleSendMessage} className="border-t border-[#e5e7eb] p-3 bg-white flex gap-2">
-                    <Input
-                      value={inputMessage}
-                      onChange={(e) => setInputMessage(e.target.value)}
-                      placeholder={
-                        interruptionReason
-                          ? "Reply to continue the workflow (or click a button above)..."
-                          : "Ask AEL to schedule a meeting, update a task, investigate a crash..."
-                      }
-                      className="bg-white border-[#e5e7eb] text-xs h-9 flex-1 focus-visible:ring-[#3ecf8e] rounded text-black"
-                      disabled={sendingMessage}
-                    />
-                    <Button
-                      type="submit"
-                      className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white font-bold text-xs h-9 px-4 rounded shadow-sm"
-                      disabled={sendingMessage || !inputMessage.trim()}
-                    >
-                      Send
-                    </Button>
+                  <form onSubmit={handleSendMessage} className="border-t border-[#e5e7eb] p-3 bg-white flex flex-col gap-2">
+                    {/* Cancel bar — shown whenever a workflow is in progress */}
+                    {interruptionReason && (
+                      <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded px-3 py-1.5">
+                        <span className="text-[10px] font-medium text-amber-700 flex items-center gap-1.5">
+                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                          Workflow in progress — type a reply or cancel
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => triggerAgentMessage("exit")}
+                          disabled={sendingMessage}
+                          className="text-[10px] font-bold text-red-600 hover:text-red-800 hover:bg-red-50 border border-red-200 rounded px-2 py-0.5 transition-colors flex items-center gap-1 cursor-pointer"
+                        >
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                          Cancel / Exit
+                        </button>
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <Input
+                        value={inputMessage}
+                        onChange={(e) => setInputMessage(e.target.value)}
+                        placeholder={
+                          interruptionReason
+                            ? "Reply to continue the workflow, or type 'exit' to cancel..."
+                            : "Ask AEL to schedule a meeting, update a task, investigate a crash..."
+                        }
+                        className="bg-white border-[#e5e7eb] text-xs h-9 flex-1 focus-visible:ring-[#3ecf8e] rounded text-black"
+                        disabled={sendingMessage}
+                      />
+                      <Button
+                        type="submit"
+                        className="bg-[#3ecf8e] hover:bg-[#34b27b] text-white font-bold text-xs h-9 px-4 rounded shadow-sm"
+                        disabled={sendingMessage || !inputMessage.trim()}
+                      >
+                        Send
+                      </Button>
+                    </div>
                   </form>
                 </div>
 

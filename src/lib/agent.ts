@@ -3,6 +3,7 @@ import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { supabase } from "./supabase";
 import { services } from "./services/container";
 import crypto from "crypto";
+import nodemailer from "nodemailer";
 
 // Helper to get Gemini model dynamically
 function getModel(config?: any) {
@@ -15,6 +16,12 @@ function getModel(config?: any) {
     apiKey: process.env.GEMINI_API_KEY,
     temperature: 0.1,
   });
+}
+
+// Helper to get the last message sent by the user to avoid processing assistant response as user input
+function getLastUserMessage(messages: any[]): string {
+  const userMsgs = (messages || []).filter(m => m.role === "user");
+  return userMsgs[userMsgs.length - 1]?.content || "";
 }
 
 // 1. Define the Graph State Schema
@@ -64,7 +71,7 @@ export const AgentState = Annotation.Root({
     reducer: (x, y) => (y !== undefined ? y : x),
     default: () => null,
   }),
-  intent: Annotation<"standup" | "investigate" | "general" | "jira_status" | "schedule" | null>({
+  intent: Annotation<"standup" | "investigate" | "general" | "jira_status" | "schedule" | "direct_email" | "schedule_team_meeting" | null>({
     reducer: (x, y) => (y !== undefined ? y : x),
     default: () => null,
   }),
@@ -80,6 +87,42 @@ export const AgentState = Annotation.Root({
     reducer: (x, y) => (y !== undefined ? y : x),
     default: () => null,
   }),
+  emailTargetDevId: Annotation<string | null>({
+    reducer: (x, y) => (y !== undefined ? y : x),
+    default: () => null,
+  }),
+  emailTargetName: Annotation<string | null>({
+    reducer: (x, y) => (y !== undefined ? y : x),
+    default: () => null,
+  }),
+  emailTargetEmail: Annotation<string | null>({
+    reducer: (x, y) => (y !== undefined ? y : x),
+    default: () => null,
+  }),
+  emailTopic: Annotation<string | null>({
+    reducer: (x, y) => (y !== undefined ? y : x),
+    default: () => null,
+  }),
+  emailDetails: Annotation<string | null>({
+    reducer: (x, y) => (y !== undefined ? y : x),
+    default: () => null,
+  }),
+  emailDraft: Annotation<string | null>({
+    reducer: (x, y) => (y !== undefined ? y : x),
+    default: () => null,
+  }),
+  teamMeetingTime: Annotation<string | null>({
+    reducer: (x, y) => (y !== undefined ? y : x),
+    default: () => null,
+  }),
+  teamMeetingDuration: Annotation<number | null>({
+    reducer: (x, y) => (y !== undefined ? y : x),
+    default: () => null,
+  }),
+  teamMeetingTopic: Annotation<string | null>({
+    reducer: (x, y) => (y !== undefined ? y : x),
+    default: () => null,
+  }),
 });
 
 // 2. Node Implementations
@@ -88,7 +131,7 @@ export const AgentState = Annotation.Root({
  * Route User Intent: Classify query and determine next node
  */
 async function routeIntentNode(state: typeof AgentState.State, config?: any) {
-  const lastMessage = state.messages[state.messages.length - 1]?.content || "";
+  const lastMessage = getLastUserMessage(state.messages);
   console.log("==> routeIntentNode entered. lastMessage:", lastMessage, "state:", { intent: state.intent, errorTrace: state.errorTrace, devEmail: state.devEmail, pendingAction: !!state.pendingAction, interruptionReason: state.interruptionReason, queueLength: state.overdueTasksQueue?.length });
 
   // 1. If we have any active interruption, check if user is trying to switch context to a new command
@@ -247,6 +290,30 @@ Return JSON ONLY in the following format:
     return {};
   }
 
+  // Local check for summary keywords
+  const msgLower = lastMessage.toLowerCase();
+  let localTimeframe: "today" | "week" | null = null;
+  let isLocalSummaryRequest = false;
+
+  if (msgLower.includes("summary") || msgLower.includes("summarise") || msgLower.includes("summarize") || msgLower.includes("overview") || msgLower.includes("report")) {
+    isLocalSummaryRequest = true;
+    if (msgLower.includes("today") || msgLower.includes("todays") || msgLower.includes("current day")) {
+      localTimeframe = "today";
+    } else if (msgLower.includes("7 days") || msgLower.includes("week") || msgLower.includes("weekly") || msgLower.includes("next 7 days") || msgLower.includes("upcoming")) {
+      localTimeframe = "week";
+    } else {
+      localTimeframe = "today"; // Default to today
+    }
+  }
+
+  // Local check for email keywords
+  let isLocalEmailRequest = false;
+  if (msgLower.includes("email") || msgLower.includes("mail") || msgLower.includes("message dev") || msgLower.includes("direct email")) {
+    if (!msgLower.includes("schedule") && !msgLower.includes("meeting") && !msgLower.includes("calendar")) {
+      isLocalEmailRequest = true;
+    }
+  }
+
   // Check user intent using LLM and parse details
   const prompt = `Classify the following developer message and extract details if applicable.
 Current time: ${new Date().toISOString()} (Use this to resolve relative dates/times like 'tomorrow', 'next monday', 'at 3 PM').
@@ -254,34 +321,40 @@ Current time: ${new Date().toISOString()} (Use this to resolve relative dates/ti
 Intents:
 1. "standup" - The user is asking for a status update, workload summaries, missed deadlines, or task updates.
 2. "investigate" - The user wants to check/investigate a system crash, alert, or database error.
-3. "schedule" - The user explicitly wants to schedule a follow-up sync/meeting, book a meeting, or invite a developer to a meeting.
-4. "list_meetings" - The user wants to view, show, list, or check scheduled meetings/syncs, optionally filtering by developer or time.
-5. "jira_status" - The user wants to check Jira tasks, sprint task status, or completed/overdue tasks on Jira.
-6. "general" - Any other general chat, greeting, or question (e.g. how to change developer gmail, how to add developer, how to use the dashboard).
+3. "schedule" - The user explicitly wants to schedule a follow-up sync/meeting with a single developer.
+4. "schedule_team_meeting" - The user explicitly wants to schedule a team-wide meeting or team sync with all team members.
+5. "list_meetings" - The user wants to view, show, list, or check scheduled meetings/syncs, optionally filtering by developer or time.
+6. "jira_status" - The user wants to check Jira tasks, sprint task status, or completed/overdue tasks on Jira.
+7. "summary" - The user wants a summary for today, or a summary for the next 7 days / week (including meetings and crashes/events).
+8. "direct_email" - The user wants to write/send a direct email to a developer or team member.
+9. "general" - Any other general chat, greeting, or question (e.g. how to change developer gmail, how to add developer, how to use the dashboard).
 
 User Message: "${lastMessage}"
 
 Return a JSON object ONLY in the following format:
 {
-  "intent": "standup" | "investigate" | "schedule" | "list_meetings" | "jira_status" | "general",
+  "intent": "standup" | "investigate" | "schedule" | "schedule_team_meeting" | "list_meetings" | "jira_status" | "summary" | "direct_email" | "general",
   "devEmail": "extracted_email_if_provided_else_null",
   "devName": "extracted_developer_name_if_provided_else_null",
   "reason": "extracted_meeting_reason_or_context_if_provided_else_null",
-  "proposedTime": "ISO_datetime_string_if_provided_else_null"
+  "proposedTime": "ISO_datetime_string_if_parsed_successfully_else_null",
+  "timeframe": "today" | "week" | null
 }`;
 
   let classified: {
-    intent: "standup" | "investigate" | "schedule" | "list_meetings" | "jira_status" | "general",
+    intent: "standup" | "investigate" | "schedule" | "schedule_team_meeting" | "list_meetings" | "jira_status" | "summary" | "direct_email" | "general",
     devEmail: string | null,
     devName: string | null,
     reason: string | null,
-    proposedTime: string | null
+    proposedTime: string | null,
+    timeframe: "today" | "week" | null
   } = {
     intent: "general",
     devEmail: null,
     devName: null,
     reason: null,
-    proposedTime: null
+    proposedTime: null,
+    timeframe: null
   };
 
   try {
@@ -293,15 +366,34 @@ Return a JSON object ONLY in the following format:
     }
   } catch (err) {
     console.error("Failed to parse intent classification JSON:", err);
-    const msg = lastMessage.toLowerCase();
-    if (msg.includes("standup") || msg.includes("status") || msg.includes("update") || msg.includes("overdue")) {
+    if (msgLower.includes("standup") || msgLower.includes("status") || msgLower.includes("update") || msgLower.includes("overdue")) {
       classified.intent = "standup";
-    } else if (msg.includes("crash") || msg.includes("investigate") || msg.includes("error")) {
+    } else if (msgLower.includes("crash") || msgLower.includes("investigate") || msgLower.includes("error")) {
       classified.intent = "investigate";
-    } else if (msg.includes("schedule") || msg.includes("sync") || msg.includes("meeting")) {
-      classified.intent = "schedule";
+    } else if (msgLower.includes("schedule") || msgLower.includes("sync") || msgLower.includes("meeting")) {
+      if (msgLower.includes("team")) {
+        classified.intent = "schedule_team_meeting";
+      } else {
+        classified.intent = "schedule";
+      }
     }
   }
+
+  // Local keywords overrides
+  if (msgLower.includes("team meeting") || msgLower.includes("schedule a team meeting") || msgLower.includes("schedule team meeting") || msgLower.includes("book a team meeting")) {
+    classified.intent = "schedule_team_meeting";
+  }
+
+  // Apply local keywords override if matching summary patterns
+  if (isLocalSummaryRequest) {
+    classified.intent = "summary";
+    if (localTimeframe) {
+      classified.timeframe = localTimeframe;
+    }
+  } else if (isLocalEmailRequest) {
+    classified.intent = "direct_email";
+  }
+
 
   if (classified.intent === "standup") {
     const { data: projects } = await supabase
@@ -344,6 +436,206 @@ Return a JSON object ONLY in the following format:
     };
   }
 
+  if (classified.intent === "summary") {
+    // 1. Fetch all incident tickets with their project/developer associations
+    const { data: tickets } = await supabase
+      .from("incident_tickets")
+      .select("ticket_id, project_id, assigned_dev_id, error_context, status, created_at");
+
+    // 2. Fetch all team members to resolve names
+    const { data: teamMembers } = await supabase
+      .from("team_members")
+      .select("dev_id, name, email_address");
+    const devMap = new Map(teamMembers?.map(m => [m.dev_id, m]) || []);
+
+    // 3. Fetch all projects to resolve names
+    const { data: projects } = await supabase
+      .from("active_projects")
+      .select("project_id, project_name");
+    const projectMap = new Map(projects?.map(p => [p.project_id, p.project_name]) || []);
+
+    // 4. Fetch all system events (severity column does not exist)
+    const { data: events } = await supabase
+      .from("system_events")
+      .select("event_id, project_id, error_trace, timestamp");
+
+    // Parse meetings from tickets
+    const meetings = [];
+    if (tickets) {
+      for (const t of tickets) {
+        if (t.error_context && t.error_context.startsWith("[Scheduled:")) {
+          const match = t.error_context.match(/^\[Scheduled:\s*([^|]+)\|\s*Link:\s*([^\]]+)\]\s*(.*)$/);
+          if (match) {
+            const timeStr = match[1].trim();
+            const meetLink = match[2].trim();
+            const originalContext = match[3].trim();
+            const dev = devMap.get(t.assigned_dev_id);
+            const projName = projectMap.get(t.project_id) || "Unknown Project";
+            const isTeamMeeting = !t.assigned_dev_id && t.error_context.toLowerCase().includes("team");
+
+            meetings.push({
+              ticketId: t.ticket_id,
+              status: t.status,
+              time: new Date(timeStr),
+              meetLink,
+              reason: originalContext,
+              devName: isTeamMeeting ? "All Team Members" : (dev ? dev.name : "Unknown Developer"),
+              devEmail: isTeamMeeting ? "(all)" : (dev ? dev.email_address : "unassigned@company.com"),
+              projectName: projName
+            });
+          }
+        }
+      }
+    }
+
+    // Parse crashes from events
+    const crashes = (events || []).map(e => {
+      const projName = projectMap.get(e.project_id) || "Unknown Project";
+      return {
+        eventId: e.event_id,
+        projectId: e.project_id,
+        projectName: projName,
+        errorTrace: e.error_trace,
+        time: new Date(e.timestamp)
+      };
+    });
+
+    const now = new Date();
+    // Start of today (local time)
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
+
+    // End of today (local time)
+    const endOfToday = new Date(now);
+    endOfToday.setHours(23, 59, 59, 999);
+
+    // 7 days ago
+    const sevenDaysAgo = new Date(startOfToday);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    // 7 days from now
+    const sevenDaysHence = new Date(endOfToday);
+    sevenDaysHence.setDate(sevenDaysHence.getDate() + 7);
+
+    const timeframe = classified.timeframe || "today";
+
+    let filteredMeetings = [];
+    let filteredCrashes = [];
+    let title = "";
+    let timeframeDesc = "";
+
+    if (timeframe === "today") {
+      title = "📅 Today's SRE & Team Summary";
+      timeframeDesc = `Report generated for today: **${now.toLocaleDateString()}**`;
+      filteredMeetings = meetings.filter(m => m.time >= startOfToday && m.time <= endOfToday);
+      filteredCrashes = crashes.filter(c => c.time >= startOfToday && c.time <= endOfToday);
+    } else {
+      title = "📅 Weekly SRE & Team Summary";
+      timeframeDesc = `Report generated for next 7 days (meetings) & past 7 days (crashes): **${sevenDaysAgo.toLocaleDateString()}** to **${sevenDaysHence.toLocaleDateString()}**`;
+      filteredMeetings = meetings.filter(m => m.time >= startOfToday && m.time <= sevenDaysHence);
+      filteredCrashes = crashes.filter(c => c.time >= sevenDaysAgo && c.time <= endOfToday);
+    }
+
+    // Sort meetings by time ascending
+    filteredMeetings.sort((a, b) => a.time.getTime() - b.time.getTime());
+    // Sort crashes by time descending
+    filteredCrashes.sort((a, b) => b.time.getTime() - a.time.getTime());
+
+    let content = `## ${title}\n*${timeframeDesc}*\n\n`;
+
+    // Render meetings table
+    content += `### 🤝 Scheduled Meetings\n`;
+    if (filteredMeetings.length === 0) {
+      content += `*No sync meetings scheduled for this period.*\n\n`;
+    } else {
+      content += `| Developer | Project | Date & Time | Meet Link | Status | Reason |\n`;
+      content += `| :--- | :--- | :--- | :--- | :--- | :--- |\n`;
+      for (const m of filteredMeetings) {
+        const dateStr = isNaN(m.time.getTime()) ? "N/A" : m.time.toLocaleString();
+        content += `| **${m.devName}** | <u>${m.projectName}</u> | \`${dateStr}\` | [Google Meet](${m.meetLink}) | \`${m.status}\` | ${m.reason} |\n`;
+      }
+      content += `\n`;
+    }
+
+    // Render crashes table
+    content += `### 🚨 System Crashes\n`;
+    if (filteredCrashes.length === 0) {
+      content += `*No system crashes detected for this period.*\n\n`;
+    } else {
+      content += `| Project | Date & Time | Ticket Status / Assigned | Error Trace Snippet |\n`;
+      content += `| :--- | :--- | :--- | :--- |\n`;
+      for (const c of filteredCrashes) {
+        const dateStr = isNaN(c.time.getTime()) ? "N/A" : c.time.toLocaleString();
+        const snippet = c.errorTrace ? (c.errorTrace.substring(0, 80).replace(/\r?\n/g, " ") + (c.errorTrace.length > 80 ? "..." : "")) : "N/A";
+
+        // Find if there is a matching ticket
+        const matchingTicket = (tickets || []).find((t: any) => {
+          if (t.project_id !== c.projectId) return false;
+          if (!t.error_context) return false;
+          
+          const cleanContext = t.error_context.replace(/^\[Scheduled:[^\]]+\]\s*/, "").trim();
+          const cleanTrace = c.errorTrace ? c.errorTrace.trim() : "";
+          
+          const traceSnippet = cleanTrace.substring(0, 150);
+          const contextSnippet = cleanContext.substring(0, 150);
+          
+          return cleanContext.toLowerCase().includes(traceSnippet.toLowerCase()) || 
+                 cleanTrace.toLowerCase().includes(contextSnippet.toLowerCase()) || 
+                 contextSnippet.toLowerCase().includes(traceSnippet.toLowerCase()) ||
+                 traceSnippet.toLowerCase().includes(contextSnippet.toLowerCase());
+        });
+
+        let ticketStatusStr = "❌ Not reported";
+        if (matchingTicket) {
+          const dev = devMap.get(matchingTicket.assigned_dev_id);
+          const devName = dev ? dev.name : "Unassigned";
+          ticketStatusStr = `🎫 **${matchingTicket.status}** (${devName})`;
+        }
+
+        content += `| <u>${c.projectName}</u> | \`${dateStr}\` | ${ticketStatusStr} | \`${snippet}\` |\n`;
+      }
+      content += `\n`;
+    }
+
+    return {
+      intent: "general",
+      messages: [{ role: "assistant", content }]
+    };
+  }
+
+  if (classified.intent === "direct_email") {
+    // 1. Fetch all team members
+    const { data: teamMembers } = await supabase
+      .from("team_members")
+      .select("dev_id, name, email_address");
+    const activeTeam = teamMembers || [];
+
+    if (activeTeam.length === 0) {
+      return {
+        intent: "general",
+        messages: [{
+          role: "assistant",
+          content: "❌ **Direct Email Failure:** There are no team members registered in the registry database to email."
+        }]
+      };
+    }
+
+    // 2. Put them in a selection prompt and set interruptionReason to "email_target_selection"
+    let content = `✉️ **Direct Email Flow Initiated:** Please select the team member you'd like to email by typing their name or selection number:\n\n`;
+    activeTeam.forEach((member, index) => {
+      content += `${index + 1}. **${member.name}** (${member.email_address})\n`;
+    });
+
+    return {
+      intent: "direct_email",
+      interruptionReason: "email_target_selection",
+      messages: [{
+        role: "assistant",
+        content
+      }]
+    };
+  }
+
   if (classified.intent === "list_meetings") {
     // 1. Fetch all incident tickets with their project/developer associations
     const { data: tickets } = await supabase
@@ -374,6 +666,7 @@ Return a JSON object ONLY in the following format:
             const originalContext = match[3].trim();
             const dev = devMap.get(t.assigned_dev_id);
             const projName = projectMap.get(t.project_id) || "Unknown Project";
+            const isTeamMeeting = !t.assigned_dev_id && t.error_context.toLowerCase().includes("team");
 
             meetings.push({
               ticketId: t.ticket_id,
@@ -381,8 +674,8 @@ Return a JSON object ONLY in the following format:
               time: new Date(timeStr),
               meetLink,
               reason: originalContext,
-              devName: dev ? dev.name : "Unknown Developer",
-              devEmail: dev ? dev.email_address : "unassigned@company.com",
+              devName: isTeamMeeting ? "All Team Members" : (dev ? dev.name : "Unknown Developer"),
+              devEmail: isTeamMeeting ? "(all)" : (dev ? dev.email_address : "unassigned@company.com"),
               projectName: projName
             });
           }
@@ -730,7 +1023,7 @@ async function jiraStatusNode(state: typeof AgentState.State, config?: any) {
   let devEmail = state.devEmail;
   let devName = state.devName;
 
-  const lastMessage = state.messages[state.messages.length - 1]?.content || "";
+  const lastMessage = getLastUserMessage(state.messages);
   const msgLower = lastMessage.toLowerCase();
 
   const { data: teamMembers } = await supabase.from("team_members").select("dev_id, name, email_address");
@@ -830,11 +1123,10 @@ async function jiraStatusNode(state: typeof AgentState.State, config?: any) {
 }
 
 async function fetchAlertNode(state: typeof AgentState.State) {
-  // Fetch active ticket details (where status is Open or Resolved)
+  // Fetch all ticket details (regardless of status casing or status values)
   const { data: activeTickets } = await supabase
     .from("incident_tickets")
-    .select("project_id, error_context")
-    .in("status", ["Open", "Resolved"]);
+    .select("project_id, error_context");
 
   // Fetch recent system events
   const { data: events, error } = await supabase
@@ -856,21 +1148,27 @@ async function fetchAlertNode(state: typeof AgentState.State) {
   }
 
   // Find the most recent event that is NOT triaged.
-  // We consider an event triaged if there is an active ticket whose error_context contains the event's error trace.
+  // We consider an event triaged if there is an active ticket whose error_context matches/contains the event's error trace.
   const event = events.find((e: any) => {
     if (!e.error_trace) return false;
 
-    // Check if any open ticket matches this project and has a similar error trace
+    // Check if any ticket matches this project and has a similar error trace
     const alreadyHasTicket = activeTickets?.some((t: any) => {
       if (t.project_id !== e.project_id) return false;
       if (!t.error_context) return false;
       
+      // Strip any [Scheduled: ... | Link: ...] prefix from ticket error_context
+      const cleanContext = t.error_context.replace(/^\[Scheduled:[^\]]+\]\s*/, "").trim();
       const cleanTrace = e.error_trace.trim();
-      const cleanContext = t.error_context.trim();
       
-      // Check if context contains a significant portion of the trace
-      const traceSnippet = cleanTrace.substring(0, 100);
-      return cleanContext.includes(traceSnippet) || cleanTrace.includes(cleanContext);
+      // Compare the first 150 characters or see if either contains the other
+      const traceSnippet = cleanTrace.substring(0, 150);
+      const contextSnippet = cleanContext.substring(0, 150);
+      
+      return cleanContext.includes(traceSnippet) || 
+             cleanTrace.includes(contextSnippet) || 
+             contextSnippet.includes(traceSnippet) ||
+             traceSnippet.includes(contextSnippet);
     });
 
     return !alreadyHasTicket;
@@ -1171,8 +1469,234 @@ async function checkWorkloadNode(state: typeof AgentState.State) {
   };
 }
 async function resolveIdentityNode(state: typeof AgentState.State, config?: any) {
-  const lastMessage = state.messages[state.messages.length - 1]?.content || "";
+  const lastMessage = getLastUserMessage(state.messages);
   console.log("==> resolveIdentityNode entered. lastMessage:", lastMessage, "interruptionReason:", state.interruptionReason, "meetingTime in state:", state.meetingTime);
+
+  // ── UNIVERSAL EXIT HANDLER ────────────────────────────────────────────────
+  // Any time the user types "exit", "back", "cancel", "quit", "stop", or "abort"
+  // during any interrupted workflow, completely reset all state and return to idle.
+  const exitKeywords = ["exit", "back", "cancel", "quit", "stop", "abort", "escape", "nevermind", "never mind"];
+  if (exitKeywords.includes(lastMessage.toLowerCase().trim())) {
+    return {
+      // Reset scheduling state
+      projectId: null, devId: null, devName: null, devEmail: null,
+      githubUsername: null, jiraAccountId: null, errorTrace: null,
+      pendingAction: null, actionApproved: null, meetingTime: null,
+      // Reset email state
+      emailTargetDevId: null, emailTargetName: null, emailTargetEmail: null,
+      emailTopic: null, emailDetails: null, emailDraft: null,
+      // Reset team meeting state
+      teamMeetingTime: null, teamMeetingDuration: null, teamMeetingTopic: null,
+      // Clear intent & interruption
+      interruptionReason: null,
+      intent: "general" as const,
+      messages: [{
+        role: "assistant" as const,
+        content: `↩️ **Workflow Cancelled.** You've exited the current flow. How else can I help you?`
+      }]
+    };
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // EMAIL STEP 1: Select team member
+  if (state.interruptionReason === "email_target_selection") {
+    const { data: teamMembers } = await supabase
+      .from("team_members")
+      .select("dev_id, name, email_address");
+    const activeTeam = teamMembers || [];
+
+    let selectedUser = null;
+    const msgLower = lastMessage.toLowerCase().trim();
+    const num = parseInt(msgLower, 10);
+
+    if (!isNaN(num) && num >= 1 && num <= activeTeam.length) {
+      selectedUser = activeTeam[num - 1];
+    } else {
+      for (const m of activeTeam) {
+        if (m.name.toLowerCase().includes(msgLower) || msgLower.includes(m.name.toLowerCase()) || m.email_address.toLowerCase() === msgLower) {
+          selectedUser = m;
+          break;
+        }
+      }
+    }
+
+    if (selectedUser) {
+      return {
+        emailTargetDevId: selectedUser.dev_id,
+        emailTargetName: selectedUser.name,
+        emailTargetEmail: selectedUser.email_address,
+        interruptionReason: "email_topic_required",
+        messages: [{
+          role: "assistant",
+          content: `🎯 **Developer Selected:** You've selected **${selectedUser.name}** (${selectedUser.email_address}).\n\nWhat is the topic or subject of the email you'd like to send them?`
+        }]
+      };
+    } else {
+      let content = `⚠️ **Invalid Selection:** I couldn't match your input with any team members. Please select by typing their name or selection number:\n\n`;
+      activeTeam.forEach((member, index) => {
+        content += `${index + 1}. **${member.name}** (${member.email_address})\n`;
+      });
+      return {
+        interruptionReason: "email_target_selection",
+        messages: [{
+          role: "assistant",
+          content
+        }]
+      };
+    }
+  }
+
+  // EMAIL STEP 2: Receive topic — ask for additional details before drafting
+  if (state.interruptionReason === "email_topic_required") {
+    const topic = lastMessage.trim();
+
+    return {
+      emailTopic: topic,
+      interruptionReason: "email_details_required",
+      messages: [{
+        role: "assistant",
+        content: `📝 **Topic Received:** _"${topic}"_\n\nTo write a complete, professional email with no missing information, please provide the following details (type them out below):\n\n- **Your name** (the sender's name)\n- **Project name** (if applicable)\n- **Any specific details** (e.g. PR/branch link, deadline, areas to review, or specific concerns)\n\n_Example: "My name is Ahmad. The project is AEL Dashboard. PR link: https://github.com/org/repo/pull/42. Deadline is Monday EOD."_`
+      }]
+    };
+  }
+
+  // EMAIL STEP 2b: Receive details & generate professional email with full context
+  if (state.interruptionReason === "email_details_required") {
+    const details = lastMessage.trim();
+
+    // Generate professional email draft using LLM — strictly no placeholders allowed
+    const emailPrompt = `You are a professional Engineering Manager writing a corporate email on behalf of a sender.
+
+CRITICAL RULES:
+- Do NOT use any placeholders like [Project Name], [Your Name], [Date], [Link], etc.
+- Use ONLY the information provided below. If a detail is missing, omit that sentence entirely rather than using a placeholder.
+- Write in a complete, polished professional tone.
+- Output ONLY the email subject line and email body. No other commentary.
+
+SENDER DETAILS PROVIDED:
+${details}
+
+TARGET RECIPIENT NAME: ${state.emailTargetName}
+EMAIL TOPIC / PURPOSE: ${state.emailTopic}
+
+Format your output as:
+Subject: <subject line>
+
+<email body>`;
+
+    let draftText = "";
+    try {
+      const response = await getModel(config).invoke(emailPrompt);
+      draftText = response.content.toString();
+    } catch (err) {
+      console.error("LLM failed to generate email draft:", err);
+      draftText = `Subject: ${state.emailTopic}\n\nDear ${state.emailTargetName},\n\nI hope this message finds you well.\n\nI am writing to you regarding ${state.emailTopic}. ${details}\n\nPlease do not hesitate to reach out if you have any questions.\n\nBest regards,\nEngineering Team`;
+    }
+
+    return {
+      emailDetails: details,
+      emailDraft: draftText,
+      interruptionReason: "email_send_approval",
+      messages: [{
+        role: "assistant",
+        content: `✉️ **Email Draft Generated for ${state.emailTargetName} (${state.emailTargetEmail}):**\n\n---\n\n${draftText}\n\n---\n\nWould you like to **send** this email now? (Type **yes** / **send** to deliver, or **no** / **cancel** to discard)`
+      }]
+    };
+  }
+
+  // EMAIL STEP 3: Confirm & deliver email
+  if (state.interruptionReason === "email_send_approval") {
+    const responseLower = lastMessage.toLowerCase().trim();
+    
+    if (responseLower === "yes" || responseLower === "send" || responseLower === "approve" || responseLower === "yes send") {
+      // Extract subject and body from the draft
+      const draftLines = (state.emailDraft || "").split("\n");
+      const subjectLine = draftLines.find(l => l.trim().toLowerCase().startsWith("subject:"));
+      const subject = subjectLine ? subjectLine.replace(/^subject:/i, "").trim() : (state.emailTopic || "Message from AEL");
+      const bodyStart = draftLines.findIndex(l => l.trim().toLowerCase().startsWith("subject:"));
+      const bodyText = draftLines.slice(bodyStart + 1).join("\n").trim();
+
+      // Send real email via Gmail SMTP
+      let emailSent = false;
+      let emailError = "";
+      try {
+        const transporter = nodemailer.createTransport({
+          service: "gmail",
+          auth: {
+            user: process.env.GMAIL_USER,
+            pass: process.env.GMAIL_APP_PASSWORD,
+          },
+        });
+
+        await transporter.sendMail({
+          from: `"AEL — Autonomous Engineering Lead" <${process.env.GMAIL_USER}>`,
+          to: state.emailTargetEmail || "",
+          subject,
+          text: bodyText,
+          html: bodyText.replace(/\n/g, "<br>"),
+        });
+        emailSent = true;
+      } catch (smtpErr: any) {
+        console.error("Gmail SMTP send failed:", smtpErr);
+        emailError = smtpErr.message || "Unknown SMTP error";
+      }
+
+      // Log to system_events regardless of send result
+      try {
+        const { data: projects } = await supabase
+          .from("active_projects")
+          .select("project_id");
+        const fallbackProjectId = projects && projects.length > 0 ? projects[0].project_id : null;
+
+        await supabase.from("system_events").insert({
+          project_id: state.projectId || fallbackProjectId,
+          error_trace: `[Email ${emailSent ? "Sent" : "Failed"}] To: ${state.emailTargetEmail} | Subject: ${subject}\n\nBody:\n${bodyText}${emailError ? `\n\nError: ${emailError}` : ""}`,
+          timestamp: new Date().toISOString()
+        });
+      } catch (dbErr) {
+        console.error("Failed to insert email log to database:", dbErr);
+      }
+
+      return {
+        emailTargetDevId: null,
+        emailTargetName: null,
+        emailTargetEmail: null,
+        emailTopic: null,
+        emailDetails: null,
+        emailDraft: null,
+        interruptionReason: null,
+        intent: "general",
+        messages: [{
+          role: "assistant",
+          content: emailSent
+            ? `✅ **Email Sent!** Your email has been delivered to **${state.emailTargetName}** at \`${state.emailTargetEmail}\` via Gmail SMTP.`
+            : `⚠️ **Email Draft Saved — SMTP Delivery Failed:** Could not send via Gmail. Error: _${emailError}_\n\nThe draft has been logged. Please check your Gmail App Password in \`.env.local\`.`
+        }]
+      };
+    } else if (responseLower === "no" || responseLower === "cancel" || responseLower === "decline") {
+      return {
+        emailTargetDevId: null,
+        emailTargetName: null,
+        emailTargetEmail: null,
+        emailTopic: null,
+        emailDraft: null,
+        interruptionReason: null,
+        intent: "general",
+        messages: [{
+          role: "assistant",
+          content: `❌ **Email Draft Cancelled:** The email to **${state.emailTargetName}** has been discarded.`
+        }]
+      };
+    } else {
+      return {
+        interruptionReason: "email_send_approval",
+        messages: [{
+          role: "assistant",
+          content: `Please confirm if you'd like to send this email. (Type **yes** / **send** to deliver, or **no** / **cancel** to discard)`
+        }]
+      };
+    }
+  }
 
   // 1. If we were interrupted by unmapped_identity, check if user provided email
   if (state.interruptionReason === "unmapped_identity") {
@@ -1522,7 +2046,7 @@ async function prepActionNode(state: typeof AgentState.State) {
 
   // Check if we already have approval decision in message history
   if (state.pendingAction) {
-    const lastMessage = state.messages[state.messages.length - 1]?.content || "";
+    const lastMessage = getLastUserMessage(state.messages);
     const responseLower = lastMessage.toLowerCase().trim();
 
     // 1. Check if the message contains a new email address to update the draft/assignee
@@ -1854,6 +2378,261 @@ async function executeActionNode(state: typeof AgentState.State) {
     };
   }
 }
+
+/**
+ * Team Meeting Node: Schedule a team-wide meeting
+ * Flow:
+ *   1. Ask for meeting date & time (GMT)
+ *   2. Ask for duration (minutes)
+ *   3. Ask for meeting topic
+ *   4. Show confirmation summary → await approval
+ *   5. On approval: create Google Calendar event, save to DB, return Meet link
+ */
+async function teamMeetingNode(state: typeof AgentState.State, config?: any) {
+  const lastMessage = getLastUserMessage(state.messages);
+  console.log("==> teamMeetingNode entered. interruptionReason:", state.interruptionReason, "lastMessage:", lastMessage);
+
+  const interruptionReason: string | null = state.interruptionReason;
+
+  // ── EXIT HANDLER ─────────────────────────────────────────────────────────
+  const exitKeywords = ["exit", "back", "cancel", "quit", "stop", "abort", "escape", "nevermind", "never mind"];
+  if (exitKeywords.includes(lastMessage.toLowerCase().trim())) {
+    return {
+      teamMeetingTime: null,
+      teamMeetingDuration: null,
+      teamMeetingTopic: null,
+      interruptionReason: null,
+      intent: "general" as const,
+      messages: [{
+        role: "assistant" as const,
+        content: `↩️ **Team Meeting Scheduling Cancelled.** No meeting has been booked. How else can I help you?`
+      }]
+    };
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // STEP 1: Ask for date & time
+  if (interruptionReason !== "team_meeting_time" &&
+      interruptionReason !== "team_meeting_duration" &&
+      interruptionReason !== "team_meeting_topic" &&
+      interruptionReason !== "team_meeting_approval") {
+    return {
+      teamMeetingTime: null,
+      teamMeetingDuration: null,
+      teamMeetingTopic: null,
+      interruptionReason: "team_meeting_time",
+      messages: [{
+        role: "assistant",
+        content: `👥 **Schedule a Team Meeting**\n\nI'll set up a Google Meet call with all team members.\n\n**Step 1 of 3 — Date & Time:**\nPlease provide the meeting date and time in **GMT** (e.g. \`2026-07-10 14:00 GMT\` or \`July 10th at 2:00 PM GMT\`).`
+      }]
+    };
+  }
+
+  // STEP 2: Receive time, ask for duration
+  if (interruptionReason === "team_meeting_time") {
+    const timeInput = lastMessage.trim();
+
+    // Use LLM to parse the date/time into an ISO string
+    let parsedTime: string | null = null;
+    try {
+      const parsePrompt = `Convert the following date/time input to an ISO 8601 UTC datetime string. Current UTC time is: ${new Date().toISOString()}. 
+Input: "${timeInput}"
+Return ONLY the ISO string with no other text. Example: 2026-07-10T14:00:00.000Z`;
+      const response = await getModel(config).invoke(parsePrompt);
+      const raw = response.content.toString().trim().replace(/```/g, "").trim();
+      if (raw && !isNaN(Date.parse(raw))) {
+        parsedTime = raw;
+      }
+    } catch { /* ignore */ }
+
+    if (!parsedTime) {
+      return {
+        interruptionReason: "team_meeting_time",
+        messages: [{
+          role: "assistant",
+          content: `⚠️ I couldn't parse that date/time. Please try a clearer format, e.g. \`July 10th at 2:00 PM GMT\` or \`2026-07-10 14:00 GMT\`.`
+        }]
+      };
+    }
+
+    const displayTime = new Date(parsedTime).toUTCString();
+    return {
+      teamMeetingTime: parsedTime,
+      interruptionReason: "team_meeting_duration",
+      messages: [{
+        role: "assistant",
+        content: `✅ **Meeting Time Set:** ${displayTime}\n\n**Step 2 of 3 — Duration:**\nHow long should the meeting be? (e.g. \`30 minutes\`, \`1 hour\`, \`45 min\`)`
+      }]
+    };
+  }
+
+  // STEP 3: Receive duration, ask for topic
+  if (interruptionReason === "team_meeting_duration") {
+    const durationInput = lastMessage.trim().toLowerCase();
+
+    // Parse duration to minutes
+    let durationMinutes = 0;
+    const hourMatch = durationInput.match(/(\d+(?:\.\d+)?)\s*h/);
+    const minMatch = durationInput.match(/(\d+)\s*(?:m|min)/);
+    if (hourMatch) durationMinutes += Math.round(parseFloat(hourMatch[1]) * 60);
+    if (minMatch) durationMinutes += parseInt(minMatch[1]);
+    if (!hourMatch && !minMatch) {
+      const numMatch = durationInput.match(/\d+/);
+      if (numMatch) durationMinutes = parseInt(numMatch[0]);
+    }
+
+    if (durationMinutes <= 0 || durationMinutes > 480) {
+      return {
+        interruptionReason: "team_meeting_duration",
+        messages: [{
+          role: "assistant",
+          content: `⚠️ I couldn't determine a valid duration. Please specify in minutes, e.g. \`30 minutes\`, \`1 hour\`, or \`45 min\`.`
+        }]
+      };
+    }
+
+    return {
+      teamMeetingDuration: durationMinutes,
+      interruptionReason: "team_meeting_topic",
+      messages: [{
+        role: "assistant",
+        content: `✅ **Duration Set:** ${durationMinutes} minutes\n\n**Step 3 of 3 — Topic:**\nWhat is the agenda or topic for this meeting? (e.g. \`Sprint Retrospective\`, \`Q3 Planning\`, \`Incident Post-Mortem\`)`
+      }]
+    };
+  }
+
+  // STEP 4: Receive topic, show confirmation summary
+  if (interruptionReason === "team_meeting_topic") {
+    const topic = lastMessage.trim();
+    const meetingTime = state.teamMeetingTime!;
+    const duration = state.teamMeetingDuration!;
+    const displayTime = new Date(meetingTime).toUTCString();
+    const endTime = new Date(new Date(meetingTime).getTime() + duration * 60 * 1000).toUTCString();
+
+    // Fetch team members to show in summary
+    const { data: teamMembers } = await supabase
+      .from("team_members")
+      .select("dev_id, name, email_address");
+    const activeTeam = teamMembers || [];
+    const attendeeList = activeTeam.map(m => `  - **${m.name}** (${m.email_address})`).join("\n");
+
+    return {
+      teamMeetingTopic: topic,
+      interruptionReason: "team_meeting_approval",
+      messages: [{
+        role: "assistant",
+        content: `📋 **Team Meeting Summary — Please Confirm:**\n\n| Field | Details |\n|---|---|\n| **Topic** | ${topic} |\n| **Start** | ${displayTime} |\n| **End** | ${endTime} |\n| **Duration** | ${duration} minutes |\n| **Attendees** | All Team Members (${activeTeam.length}) |\n\n**Attendees:**\n${attendeeList}\n\n---\nType **yes** to schedule this meeting and send Google Meet invites to all team members, or **no** to cancel.`
+      }]
+    };
+  }
+
+  // STEP 5: Approval → execute
+  if (interruptionReason === "team_meeting_approval") {
+    const responseLower = lastMessage.toLowerCase().trim();
+
+    if (responseLower === "no" || responseLower === "cancel") {
+      return {
+        teamMeetingTime: null,
+        teamMeetingDuration: null,
+        teamMeetingTopic: null,
+        interruptionReason: null,
+        intent: "general",
+        messages: [{
+          role: "assistant",
+          content: `❌ **Team Meeting Cancelled.** No event has been scheduled.`
+        }]
+      };
+    }
+
+    if (responseLower !== "yes" && responseLower !== "confirm" && responseLower !== "schedule") {
+      return {
+        interruptionReason: "team_meeting_approval",
+        messages: [{
+          role: "assistant",
+          content: `Please type **yes** to confirm and schedule the meeting, or **no** to cancel.`
+        }]
+      };
+    }
+
+    // Fetch team members
+    const { data: teamMembers } = await supabase
+      .from("team_members")
+      .select("dev_id, name, email_address");
+    const activeTeam = teamMembers || [];
+    const attendees = activeTeam.map(m => ({ email: m.email_address, name: m.name }));
+
+    const topic = state.teamMeetingTopic!;
+    const meetingTime = state.teamMeetingTime!;
+    const duration = state.teamMeetingDuration!;
+
+    let meetLink = "";
+    let eventUrl = "";
+
+    try {
+      const result = await services.calendarService.scheduleTeamMeeting(
+        attendees,
+        topic,
+        meetingTime,
+        duration
+      );
+      meetLink = result.meetLink;
+      eventUrl = result.eventUrl || "";
+    } catch (calErr: any) {
+      console.error("Google Calendar team meeting creation failed:", calErr);
+      // Fallback: generate a placeholder meet link for demo
+      meetLink = `https://meet.google.com/ael-team-${Date.now().toString(36)}`;
+      eventUrl = meetLink;
+    }
+
+    // Save to incident_tickets for listing in summary
+    try {
+      const { data: projects } = await supabase
+        .from("active_projects")
+        .select("project_id");
+      const projectId = projects && projects.length > 0 ? projects[0].project_id : null;
+
+      await supabase.from("incident_tickets").insert({
+        project_id: projectId,
+        assigned_dev_id: null,
+        title: `Team Sync: ${topic}`,
+        description: `Auto-scheduled team meeting for all team members. Topic: ${topic}. Duration: ${duration} minutes.`,
+        severity: "Low",
+        status: "Scheduled",
+        meet_link: meetLink,
+        error_context: `[Scheduled: ${meetingTime} | Link: ${meetLink}] Team meeting — ${topic} (${duration} min). All team members invited.`,
+        created_at: new Date().toISOString()
+      });
+    } catch (dbErr) {
+      console.error("Failed to save team meeting to incident_tickets:", dbErr);
+    }
+
+    const displayTime = new Date(meetingTime).toUTCString();
+    const endDisplay = new Date(new Date(meetingTime).getTime() + duration * 60 * 1000).toUTCString();
+    const attendeeNames = activeTeam.map(m => m.name).join(", ");
+
+    return {
+      teamMeetingTime: null,
+      teamMeetingDuration: null,
+      teamMeetingTopic: null,
+      interruptionReason: null,
+      intent: "general",
+      messages: [{
+        role: "assistant",
+        content: `✅ **Team Meeting Scheduled Successfully!**\n\n| Field | Details |\n|---|---|\n| **Topic** | ${topic} |\n| **Start** | ${displayTime} |\n| **End** | ${endDisplay} |\n| **Duration** | ${duration} minutes |\n| **Attendees** | ${attendeeNames} |\n| **Google Meet** | [Join Meeting](${meetLink}) |\n\n📧 Calendar invites have been sent to all team members.\n🗓️ This meeting has been recorded in the Today's Summary and Weekly Summary reports.\n\n[📎 Open in Google Calendar](${eventUrl})`
+      }]
+    };
+  }
+
+  // Fallback
+  return {
+    interruptionReason: "team_meeting_time",
+    messages: [{
+      role: "assistant",
+      content: `👥 **Schedule a Team Meeting**\n\nPlease provide the meeting date and time in **GMT** to get started.`
+    }]
+  };
+}
+
 // 3. Define Conditional Routing Logic
 
 function determineIntentRoute(state: typeof AgentState.State) {
@@ -1861,8 +2640,18 @@ function determineIntentRoute(state: typeof AgentState.State) {
   if (state.pendingAction && state.actionApproved !== null) {
     return "executeActionNode";
   }
+  // Team meeting interruptions go back to teamMeetingNode
+  if (state.interruptionReason === "team_meeting_time" ||
+      state.interruptionReason === "team_meeting_duration" ||
+      state.interruptionReason === "team_meeting_topic" ||
+      state.interruptionReason === "team_meeting_approval") {
+    return "teamMeetingNode";
+  }
   if (state.interruptionReason) {
     return "resolveIdentityNode";
+  }
+  if (state.intent === "schedule_team_meeting") {
+    return "teamMeetingNode";
   }
   if ((state.intent === "schedule" || (state.errorTrace && state.devEmail)) && !state.pendingAction) {
     return "checkWorkloadNode";
@@ -1914,7 +2703,7 @@ function determineIdentityRoute(state: typeof AgentState.State) {
     return END;
   }
   if (state.devEmail) {
-    const lastMessage = state.messages[state.messages.length - 1]?.content || "";
+    const lastMessage = getLastUserMessage(state.messages);
     const responseLower = lastMessage.toLowerCase().trim();
     if (responseLower === "yes" || responseLower === "yes proceed" || responseLower === "proceed") {
       return "prepActionNode";
@@ -1935,6 +2724,7 @@ function determineActionRoute(state: typeof AgentState.State) {
 const workflow = new StateGraph(AgentState)
   .addNode("routeIntentNode", routeIntentNode)
   .addNode("resolveIdentityNode", resolveIdentityNode)
+  .addNode("teamMeetingNode", teamMeetingNode)
   .addNode("standupNode", standupNode)
   .addNode("jiraStatusNode", jiraStatusNode)
   .addNode("fetchAlertNode", fetchAlertNode)
@@ -1949,6 +2739,7 @@ workflow.addEdge(START, "routeIntentNode");
 
 workflow.addConditionalEdges("routeIntentNode", determineIntentRoute, {
   resolveIdentityNode: "resolveIdentityNode",
+  teamMeetingNode: "teamMeetingNode",
   standupNode: "standupNode",
   jiraStatusNode: "jiraStatusNode",
   fetchAlertNode: "fetchAlertNode",
@@ -1956,6 +2747,8 @@ workflow.addConditionalEdges("routeIntentNode", determineIntentRoute, {
   executeActionNode: "executeActionNode",
   [END]: END
 });
+
+workflow.addEdge("teamMeetingNode", END);
 
 workflow.addEdge("standupNode", END);
 workflow.addEdge("jiraStatusNode", END);

@@ -82,11 +82,16 @@ export async function GET() {
       .lt("timestamp", oneWeekAgo);
 
     // Calculate week-over-week percentage change
+    const lastWeekCount = lastWeekEvents ?? 0;
+    const thisWeekCount = thisWeekEvents ?? 0;
     let weeklyChangePercent = 0;
-    if (lastWeekEvents && lastWeekEvents > 0) {
+    if (lastWeekCount > 0) {
       weeklyChangePercent = Math.round(
-        (((thisWeekEvents ?? 0) - lastWeekEvents) / lastWeekEvents) * 100
+        ((thisWeekCount - lastWeekCount) / lastWeekCount) * 100
       );
+    } else if (thisWeekCount > 0) {
+      // If last week was 0 and this week is > 0, calculate increase relative to 1 baseline
+      weeklyChangePercent = thisWeekCount * 100;
     }
 
     return NextResponse.json({

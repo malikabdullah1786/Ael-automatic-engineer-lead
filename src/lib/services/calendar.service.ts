@@ -7,8 +7,17 @@ export class GoogleCalendarService implements ICalendarService {
   constructor() {
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    const redirectUri = process.env.GOOGLE_REDIRECT_URI;
     const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+
+    // Auto-resolve redirect URI:
+    //  1. Use GOOGLE_REDIRECT_URI if explicitly set
+    //  2. Use Vercel's auto-injected VERCEL_URL in production (never exposes localhost)
+    //  3. Fall back to localhost for local development
+    const appBaseUrl = process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : "http://localhost:3000";
+    const redirectUri =
+      process.env.GOOGLE_REDIRECT_URI || `${appBaseUrl}/oauth2callback`;
 
     this.oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
     if (refreshToken) {
@@ -74,6 +83,10 @@ export class GoogleCalendarService implements ICalendarService {
     const eventPayload = {
       summary: `Incident Sync: ${projectName} — Ticket ${ticketId}`,
       description: `Auto-scheduled by the Autonomous Engineering Lead (AEL) Agent.\n\nReason: Intercepted system crash alert in the repository.\n\nCrash context:\n${errorContext}`,
+      organizer: {
+        displayName: "AEL — Autonomous Engineering Lead",
+        email: process.env.GMAIL_USER || process.env.GOOGLE_CLIENT_ID,
+      },
       start: {
         dateTime: startTime.toISOString(),
         timeZone: "UTC",
@@ -117,6 +130,73 @@ export class GoogleCalendarService implements ICalendarService {
     } catch (error: any) {
       console.error("Google Calendar API failure:", error);
       throw error; // Let caller catch and handle with specific message codes
+    }
+  }
+
+  public async scheduleTeamMeeting(
+    attendees: Array<{ email: string; name: string }>,
+    topic: string,
+    meetingTime: string,
+    durationMinutes: number
+  ): Promise<MeetingDetails> {
+    const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+    if (!refreshToken || refreshToken === "your_oauth_refresh_token_for_offline_access") {
+      throw new Error("GOOGLE_CALENDAR_AUTH_MISSING");
+    }
+
+    const calendar = google.calendar({ version: "v3", auth: this.oauth2Client });
+
+    const startTime = new Date(meetingTime);
+    const endTime = new Date(startTime.getTime() + durationMinutes * 60 * 1000);
+
+    const eventPayload = {
+      summary: `Team Sync: ${topic}`,
+      description: `Auto-scheduled Team Sync by the Autonomous Engineering Lead (AEL) Agent.\n\nTopic: ${topic}\nDuration: ${durationMinutes} minutes`,
+      organizer: {
+        displayName: "AEL — Autonomous Engineering Lead",
+        email: process.env.GMAIL_USER || process.env.GOOGLE_CLIENT_ID,
+      },
+      start: {
+        dateTime: startTime.toISOString(),
+        timeZone: "UTC",
+      },
+      end: {
+        dateTime: endTime.toISOString(),
+        timeZone: "UTC",
+      },
+      attendees: attendees.map(a => ({ email: a.email, displayName: a.name })),
+      conferenceData: {
+        createRequest: {
+          requestId: `ael-team-sync-${Date.now()}`,
+          conferenceSolutionKey: {
+            type: "hangoutsMeet",
+          },
+        },
+      },
+    };
+
+    try {
+      const response = await calendar.events.insert({
+        calendarId: "primary",
+        requestBody: eventPayload,
+        conferenceDataVersion: 1,
+        sendUpdates: "all",
+      });
+
+      const event = response.data;
+      const meetLink = event.hangoutLink || "";
+      const eventUrl = event.htmlLink || "";
+
+      return {
+        eventId: event.id || "",
+        meetLink,
+        eventUrl,
+        startDateTime: startTime.toISOString(),
+        endDateTime: endTime.toISOString(),
+      };
+    } catch (error: any) {
+      console.error("Google Calendar Team Meeting API failure:", error);
+      throw error;
     }
   }
 }
