@@ -72,6 +72,7 @@ yarn-error.log*
 .pnpm-debug.log*
 *.log
 logs/
+!src/app/api/logs/
 
 # -----------------------------------------------------------------------------
 # 9. OS & SYSTEM JUNK
