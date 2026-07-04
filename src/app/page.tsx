@@ -3040,7 +3040,7 @@ export default function Home() {
                                   {team.map((member, idx) => (
                                     <Button
                                       key={member.dev_id}
-                                      onClick={() => triggerAgentMessage(member.name)}
+                                      onClick={() => triggerAgentMessage(member.email_address || member.name)}
                                       className="bg-white border border-[#e5e7eb] hover:bg-[#f9fafb] text-[#111827] text-xs h-8 justify-start font-semibold rounded shadow-sm text-left px-3 flex items-center gap-2"
                                       disabled={sendingMessage}
                                     >
@@ -3064,7 +3064,7 @@ export default function Home() {
                                   {team.map((member, idx) => (
                                     <Button
                                       key={member.dev_id}
-                                      onClick={() => triggerAgentMessage(member.name)}
+                                      onClick={() => triggerAgentMessage(member.email_address || member.name)}
                                       className="bg-white border border-[#e5e7eb] hover:bg-[#f9fafb] text-[#111827] text-xs h-8 justify-start font-semibold rounded shadow-sm text-left px-3 flex items-center gap-2"
                                       disabled={sendingMessage}
                                     >

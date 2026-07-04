@@ -1502,7 +1502,7 @@ async function resolveIdentityNode(state: typeof AgentState.State, config?: any)
   if (state.interruptionReason === "email_target_selection") {
     const { data: teamMembers } = await supabase
       .from("team_members")
-      .select("dev_id, name, email_address");
+      .select("dev_id, name, email_address, github_username");
     const activeTeam = teamMembers || [];
 
     let selectedUser = null;
@@ -1513,7 +1513,12 @@ async function resolveIdentityNode(state: typeof AgentState.State, config?: any)
       selectedUser = activeTeam[num - 1];
     } else {
       for (const m of activeTeam) {
-        if (m.name.toLowerCase().includes(msgLower) || msgLower.includes(m.name.toLowerCase()) || m.email_address.toLowerCase() === msgLower) {
+        if (
+          m.name.toLowerCase().includes(msgLower) ||
+          msgLower.includes(m.name.toLowerCase()) ||
+          (m.email_address && (m.email_address.toLowerCase().includes(msgLower) || msgLower.includes(m.email_address.toLowerCase()))) ||
+          (m.github_username && (m.github_username.toLowerCase().includes(msgLower) || msgLower.includes(m.github_username.toLowerCase())))
+        ) {
           selectedUser = m;
           break;
         }
@@ -1908,10 +1913,53 @@ Return a JSON object in this format ONLY:
       if (!isNaN(num) && num >= 1 && num <= assignableJiraUsers.length) {
         selectedUser = assignableJiraUsers[num - 1];
       } else {
+        // 1. Direct name / display name match
         for (const user of assignableJiraUsers) {
           if (user.displayName.toLowerCase().includes(msgLower) || msgLower.includes(user.displayName.toLowerCase())) {
             selectedUser = user;
             break;
+          }
+        }
+
+        // 2. Local team member lookup fallback
+        if (!selectedUser) {
+          const matchedMember = activeTeam.find(m =>
+            m.name.toLowerCase().includes(msgLower) ||
+            msgLower.includes(m.name.toLowerCase()) ||
+            (m.email_address && m.email_address.toLowerCase().includes(msgLower)) ||
+            (m.github_username && m.github_username.toLowerCase().includes(msgLower))
+          );
+          if (matchedMember) {
+            for (const user of assignableJiraUsers) {
+              const uName = user.displayName.toLowerCase();
+              const uEmail = (user.emailAddress || "").toLowerCase();
+              const mName = matchedMember.name.toLowerCase();
+              const mEmail = (matchedMember.email_address || "").toLowerCase();
+              const mGit = (matchedMember.github_username || "").toLowerCase();
+              
+              if (
+                uName.includes(mName) || mName.includes(uName) ||
+                (mEmail && (uEmail.includes(mEmail) || mEmail.includes(uEmail) || uName.includes(mEmail.split("@")[0]))) ||
+                (mGit && (uName.includes(mGit) || mGit.includes(uName)))
+              ) {
+                selectedUser = user;
+                break;
+              }
+            }
+          }
+        }
+
+        // 3. Word token matching fallback
+        if (!selectedUser) {
+          const tokens = msgLower.split(/\s+/).filter(t => t.length >= 3);
+          for (const user of assignableJiraUsers) {
+            const uName = user.displayName.toLowerCase();
+            const uEmail = (user.emailAddress || "").toLowerCase();
+            const matchesToken = tokens.some(token => uName.includes(token) || uEmail.includes(token));
+            if (matchesToken) {
+              selectedUser = user;
+              break;
+            }
           }
         }
       }
